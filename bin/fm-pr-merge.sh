@@ -315,11 +315,14 @@
 # <word> (a known word, chosen by the caller from the task) whose body has no
 # Class line appends that one line, after one blank line, to the body exactly
 # as the forge holds it, under the away record's lock, then reads the body
-# back and refuses unless it is the old body plus that line; the merge then
-# runs every gate as usual. That is the only PR write away authority makes
-# before a merge. The flag writes nothing and refuses for a body that already
-# carries another Class word or an invalid one, a body that changed since the
-# live verify, or a task whose brief asks for no line; it is refused attended,
+# back and refuses unless it is the old body plus that line; every live gate
+# then reads the pull request again, once, since the edit can start a
+# workflow at the same head, and the merge runs as usual. That is the only PR
+# write away authority makes before a merge. The flag writes nothing and
+# refuses for a body that already carries another Class word or an invalid
+# one, a body that changed since the live verify, a body where the appended
+# line would not read as that word (an unclosed code fence), or a task whose
+# brief asks for no line; it is refused attended,
 # where the line is added by hand, and on GitLab and Forgejo. A body already
 # carrying the same word merges without a write, so a re-run is safe.
 #
@@ -507,6 +510,8 @@ ALLOW_REVERT=false
 CAPTAIN_APPROVAL_FILE=
 CAPTAIN_APPROVAL_LINE=
 ADD_CLASS=
+FM_PR_CLASS_WRITTEN=false
+FM_PR_CLASS_REVERIFIED=false
 EXPECTED_HEAD=
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -2424,7 +2429,7 @@ require_pr_class() {
     echo "error: --add-class only adds a missing line, never changes one, so this body waits for the captain's return" >&2
     return 1
   fi
-  if [ "$status" -eq 1 ] && [ "$FM_PR_AWAY_POSTURE" = true ]; then
+  if [ "$status" -eq 1 ] && [ "$FM_PR_AWAY_POSTURE" = true ] && [ "$PROVIDER" = github ]; then
     printf 'error: while away, re-run the merge with --add-class <word>, the word that fits the task (bin/fm-pr-class-lib.sh defines each); it adds that one line and nothing else\n' >&2
     return 1
   fi
@@ -2475,6 +2480,14 @@ github_add_class_line_locked() {
   expected=$(printf '%s' "$before" | jq -c --arg w "$ADD_CLASS" \
     '(.body // "") as $b | $b + (if $b == "" or ($b | endswith("\n")) then "" else "\n" end)
       + (if $b == "" then "" else "\n" end) + "Class: " + $w + "\n"')
+  # A body ending inside an open code fence would hide the line from the gate.
+  if [ "$(printf '%s' "$expected" | jq -j . | fm_pr_class_of_body)" != "$ADD_CLASS" ]; then
+    printf 'error: refusing to merge %s: a line appended to its body would not read as Class: %s (an unclosed code fence?), so nothing was written\n' "$URL" "$ADD_CLASS" >&2
+    return 1
+  fi
+  # GitHub's body update takes no expected-body guard, so a forge-side edit
+  # landing between the re-read above and this write is overwritten; the
+  # away lock serializes only this home's own actors.
   if ! printf '%s' "$expected" | jq -j . \
     | gh pr edit "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" --body-file - >/dev/null 2>&1; then
     printf 'error: refusing to merge %s: the forge refused the edit that adds Class: %s\n' "$URL" "$ADD_CLASS" >&2
@@ -2486,6 +2499,7 @@ github_add_class_line_locked() {
     return 1
   fi
   FM_PR_BODY=$(printf '%s' "$after" | jq -r '.body')
+  FM_PR_CLASS_WRITTEN=true
   printf 'verified: added Class: %s to the body of %s under away authority, and nothing else\n' "$ADD_CLASS" "$URL" >&2
 }
 
@@ -3058,6 +3072,12 @@ case "$PROVIDER" in
         exit 1
       fi
       require_pr_class || exit 1
+      # The Class edit can start a workflow at the same head, so every live
+      # gate reads the pull request again, once, before the merge.
+      if [ "$FM_PR_CLASS_WRITTEN" = true ] && [ "$FM_PR_CLASS_REVERIFIED" = false ]; then
+        FM_PR_CLASS_REVERIFIED=true
+        continue
+      fi
       require_door_authority || exit 1
       require_visual_review_approval || exit 1
       github_branch_needs_update "$@" || break

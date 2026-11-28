@@ -395,6 +395,11 @@ case "${1:-} ${2:-}" in
     [ ! -f "$fixtures/github-edit-stores" ] || stored="$fixtures/github-edit-stores"
     jq -c --rawfile b "$stored" '.body = $b' "$FM_TEST_GH_VIEW_JSON" \
       > "$FM_TEST_GH_VIEW_JSON.tmp" && mv "$FM_TEST_GH_VIEW_JSON.tmp" "$FM_TEST_GH_VIEW_JSON"
+    # A workflow the edit started reports at the same head.
+    if [ -f "$fixtures/github-check-after-edit" ]; then
+      jq -c --arg c "$(cat "$fixtures/github-check-after-edit")" '.statusCheckRollup[0].conclusion = $c' \
+        "$FM_TEST_GH_VIEW_JSON" > "$FM_TEST_GH_VIEW_JSON.tmp" && mv "$FM_TEST_GH_VIEW_JSON.tmp" "$FM_TEST_GH_VIEW_JSON"
+    fi
     exit 0
     ;;
   "pr comment")
@@ -8180,6 +8185,25 @@ test_pr_class_away_add_class_refuses_every_other_write() {
     expect_code 1 "$RC" "class-away-$want: an edit that did not land as asked must refuse: $(cat "$case_dir/stderr")"
     assert_no_grep 'pr merge' "$case_dir/gh.log" "class-away-$want: the merge ran"
   done
+
+  # A body ending inside an open code fence would hide the line, so nothing is written.
+  case_dir=$(visual_review_case class-away-open-fence "$head" $'## Summary\n\n```text\nClass: <word>\n')
+  class_brief "$case_dir"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  run_class_case "$case_dir" 184 --add-class fleet
+  expect_code 1 "$RC" "class-away-open-fence: an open fence must refuse: $(cat "$case_dir/stderr")"
+  assert_grep 'would not read as Class: fleet' "$case_dir/stderr" "class-away-open-fence: the refusal did not say why"
+  assert_no_grep 'pr edit' "$case_dir/gh.log" "class-away-open-fence: the body was edited"
+
+  # A check the edit started that fails at the same head stops the merge.
+  case_dir=$(visual_review_case class-away-check-after-edit "$head" $'## Summary\n\nA fix.\n')
+  class_brief "$case_dir"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  printf 'FAILURE' > "$case_dir/github-check-after-edit"
+  run_class_case "$case_dir" 185 --add-class fleet
+  expect_code 1 "$RC" "class-away-check-after-edit: a check that failed after the edit must refuse: $(cat "$case_dir/stderr")"
+  assert_grep 'verified: added Class: fleet' "$case_dir/stderr" "class-away-check-after-edit: the line was not added"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "class-away-check-after-edit: the merge ran past the failed check"
 
   # GitLab takes no away write.
   case_dir=$(make_gitlab_case class-away-gitlab)
