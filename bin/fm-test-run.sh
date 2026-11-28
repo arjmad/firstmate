@@ -1579,6 +1579,9 @@ families_for_changed_path() {
     tests/fixtures/fm-claude-request-capture.py)
       printf '%s\n' __script__:fm-claude-tool-exclude-live.test.sh
       ;;
+    tests/fixtures/herdr-projection-fake.py)
+      printf '%s\n' __script__:fm-spawn-herdr-lease.test.sh
+      ;;
     .pi/extensions/fm-branch-supervision.ts|.pi/extensions/lib/fm-async-exec.ts|\
     .pi/extensions/lib/fm-branch-dispatch.ts|.pi/extensions/lib/fm-native-contract.ts)
       # The portable suites that actually load these files, named one by one.

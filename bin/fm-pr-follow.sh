@@ -36,6 +36,11 @@
 # No forge writes, discovery, contribution enrollment, or ownership inference
 # from a follow. Terminal follows remain until removed, so reopening is observed.
 set -eu
+# Answer --help before the libraries below run, since sourcing them can write
+# under FM_HOME.
+case "${1:-}" in
+  -h|--help) sed -n '2,/^set -eu$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
+esac
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"

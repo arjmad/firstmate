@@ -21,7 +21,7 @@ usage() {
     NR == 1 { next }
     /^#/ { sub(/^# ?/, ""); print; next }
     { exit }
-  ' "$0" >&2
+  ' "$0"
 }
 
 die() {
