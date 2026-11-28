@@ -8,4 +8,4 @@ No upstream proposal: the size of this fork's supervisor contract is what makes 
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| A Claude ship or scout on firstmate's own repository excludes its worktree's root `AGENTS.md` and `CLAUDE.md` from memory | `bin/fm-spawn.sh` (`__CLAUDESETTINGS__` substitution), `bin/fm-dod-lib.sh` (`fm_brief_worker_role`), `tests/fm-spawn-dispatch-profile.test.sh`, `.agents/skills/harness-adapters/references/harness/claude.md` (Firstmate-repository workers) | same files | carried | 427056c4 |
+| A Claude ship or scout on firstmate's own repository excludes its worktree's root `AGENTS.md` and `CLAUDE.md` from memory | `bin/fm-spawn.sh` (`__CLAUDESETTINGS__` substitution), `bin/fm-dod-lib.sh` (`fm_brief_worker_role`), `tests/fm-spawn-dispatch-profile.test.sh`, `.agents/skills/harness-adapters/references/harness/claude.md` (Firstmate-repository workers) | same files | carried | 9ac0288e |

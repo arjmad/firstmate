@@ -8,5 +8,5 @@ No upstream proposal: upstream still ships the pipeline as its default delivery 
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| AGENTS.md drops the no-mistakes and local-only delivery branches, tells the helm every ship passes `--mode direct-PR`, and states merge authority and override once | `AGENTS.md` (precedence section, hard rules 1 and 2, section 1 shared-material shipping, section 6, section 7) | `AGENTS.md` | carried | 427056c4 |
-| validation-supervision drops its ship-start trigger | `.agents/skills/validation-supervision/SKILL.md` (description, first line), `.agents/skills/agent-skill-trigger-index/SKILL.md`, `docs/task-lifecycle.md` (Validate) | same files | carried | 427056c4 |
+| AGENTS.md drops the no-mistakes and local-only delivery branches, tells the helm every ship passes `--mode direct-PR`, and states merge authority and override once | `AGENTS.md` (precedence section, hard rules 1 and 2, section 1 shared-material shipping, section 6, section 7) | `AGENTS.md` | carried | 9ac0288e |
+| validation-supervision drops its ship-start trigger | `.agents/skills/validation-supervision/SKILL.md` (description, first line), `.agents/skills/agent-skill-trigger-index/SKILL.md`, `docs/task-lifecycle.md` (Validate) | same files | carried | 9ac0288e |

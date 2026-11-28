@@ -8,4 +8,4 @@ No upstream proposal yet: the rule follows this fleet's own CI shape.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The direct-PR Definition of done defers to a repository that opens PRs as drafts until reviewed, and makes a draft's local full suite optional where CI runs it at ready, run before it is marked ready when made; the checks wait keeps watching while a required check has not posted | `bin/fm-dod-lib.sh` (`fm_dod_block` direct-PR text, `fm_dod_checks_green_block`), `tests/fm-dod-lib.test.sh` | same files | carried | 427056c4 |
+| The direct-PR Definition of done defers to a repository that opens PRs as drafts until reviewed, and makes a draft's local full suite optional where CI runs it at ready, run before it is marked ready when made; the checks wait keeps watching while a required check has not posted | `bin/fm-dod-lib.sh` (`fm_dod_block` direct-PR text, `fm_dod_checks_green_block`), `tests/fm-dod-lib.test.sh` | same files | carried | 9ac0288e |

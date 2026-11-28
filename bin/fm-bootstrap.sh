@@ -66,8 +66,8 @@
 #          upgrade command, which runs no first-install-only step such as
 #          `setup hooks` or a `curl | sh` installer. MISSING stays for absent
 #          tools only.
-#          treehouse is OUTDATED when its installed version lacks
-#          "treehouse get --lease" or "treehouse lease" support (3.0.0+).
+#          treehouse is OUTDATED when its installed version is older than
+#          3.0.1, or when it lacks "treehouse get --lease" or "--root" support.
 #          The AXI-family floor policy is owned beside GH_AXI_MIN and
 #          LAVISH_AXI_MIN below; the per-tool owners point there.
 #          Missing or board-incompatible lavish-axi reports PRESENTATION_UNAVAILABLE;
@@ -163,7 +163,8 @@
 #                 housekeeping whose cost grows with the home's history and that
 #                 the first turn does not need - state_residue_sweep, state_archive, contribution
 #                 observation arming (fm-contributions.sh arm --if-owned), and
-#                 the PR health monitor's arming, which takes the same lock. No
+#                 the PR health monitor's and explicit PR follows' arming, which
+#                 take the same lock. No
 #                 tool detection, no version floors, no tangle check, no backlog
 #                 reconciliation, no data_media_prune, no x_mode_setup: those ran
 #                 on the blocking half.
@@ -962,6 +963,7 @@ if ! BACKEND_TOOLS=$(fm_backend_required_tools "$BACKEND"); then
   BACKEND_TOOLS=""
 fi
 TOOLS="$BACKEND_TOOLS $COMMON_TOOLS"
+TREEHOUSE_MIN=3.0.1
 # AXI-FAMILY FLOOR POLICY. Every axi-family floor is the CURRENT LATEST published
 # version of that tool, captain-bumped periodically to keep the whole fleet on the
 # newest axi tools. It is NOT the minimum feature-introduced version. These floors
@@ -973,11 +975,16 @@ GH_AXI_MIN=0.1.29
 LAVISH_AXI_MIN=0.1.80
 LAVISH_AXI_BOARD_MIN=0.1.77
 
-# Secondmate homes lease with `treehouse get --lease`; crewmate and scout spawns
-# lease their slot in place with `treehouse lease`, which first shipped in 3.0.0.
-treehouse_supports_lease() {
-  treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)' &&
-    treehouse lease --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease-holder([^[:alnum:]_-]|$)'
+# --lease durably leases secondmate homes and Herdr and t3code task slots;
+# --root gives a local secondmate home's task spawns a pool of its own clone
+# (fm_treehouse_spawn_root). The fork's crewmate and scout spawns lease their
+# slot in place with `treehouse lease`, which shipped in 3.0.0, so the
+# TREEHOUSE_MIN floor already covers it.
+treehouse_supports_required_flags() {
+  local help
+  help=$(treehouse get --help 2>&1)
+  printf '%s\n' "$help" | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)' \
+    && printf '%s\n' "$help" | grep -Eq '(^|[^[:alnum:]_-])--root([^[:alnum:]_-]|$)'
 }
 
 # Shared semantic-version floor for the tool gates below. A version string that
@@ -1606,12 +1613,17 @@ detect_local_tools() {
   for t in $COMMON_TOOLS; do
     command -v "$t" >/dev/null || missing_tool_diagnostic "$t"
   done
-  # The treehouse lease-support upgrade check is only relevant when the resolved
-  # backend actually requires treehouse (every backend except orca, which owns its
-  # own worktrees); an orca home must not be told to upgrade a provider it never uses.
+  # The treehouse version-floor and lease/root upgrade check is only relevant when
+  # the resolved backend actually requires treehouse (every backend except orca,
+  # which owns its own worktrees); an orca home must not be told to upgrade a
+  # provider it never uses.
   if fm_backend_list_contains "$TOOLS" treehouse \
-    && command -v treehouse >/dev/null 2>&1 && ! treehouse_supports_lease; then
-    echo "OUTDATED: treehouse (installed: $(tool_version treehouse); requires --lease support; upgrade: $(upgrade_cmd treehouse))"
+    && command -v treehouse >/dev/null 2>&1; then
+    if ! tool_version_at_least treehouse "$TREEHOUSE_MIN"; then
+      echo "OUTDATED: treehouse (installed: $(tool_version treehouse); requires $TREEHOUSE_MIN; upgrade: $(upgrade_cmd treehouse))"
+    elif ! treehouse_supports_required_flags; then
+      echo "OUTDATED: treehouse (installed: $(tool_version treehouse); requires --lease and --root support; upgrade: $(upgrade_cmd treehouse))"
+    fi
   fi
   if command -v gh-axi >/dev/null 2>&1 && ! tool_version_at_least gh-axi "$GH_AXI_MIN"; then
     echo "OUTDATED: gh-axi (installed: $(tool_version gh-axi); requires $GH_AXI_MIN; upgrade: $(upgrade_cmd gh-axi))"
@@ -1636,7 +1648,8 @@ treehouse_pool_report() {
   case "$threshold" in ''|*[!0-9]*) threshold=30 ;; esac
   now=$(date +%s)
   records=$(mktemp "${TMPDIR:-/tmp}/fm-pool-records.XXXXXX") || return 0
-  for state in "$root"/*/treehouse-state.json; do
+  for state in "$root"/*/treehouse-state.json \
+               "$root"/fm-secondmate/*/.treehouse/*/treehouse-state.json; do
     [ -f "$state" ] || continue
     pool_count=$((pool_count + 1))
     pool=${state%/treehouse-state.json}
@@ -1669,27 +1682,32 @@ treehouse_pool_report() {
       if [ -n "$repo" ]; then
         identity=$(git -C "$slot" remote get-url origin 2>/dev/null) || identity=$repo
         [ -n "$identity" ] || identity=$repo
-        duplicate=0
-        seen_pair=0
-        for ((i = 0; i < ${#seen_repos[@]}; i++)); do
-          if [ "${seen_repos[$i]}" = "$identity" ]; then
-            if [ "${seen_pools[$i]}" = "$pool" ]; then
-              seen_pair=1
-            else
-              duplicate=1
+        case "$pool" in
+          */fm-secondmate/*/.treehouse/*) ;;
+          *)
+            duplicate=0
+            seen_pair=0
+            for ((i = 0; i < ${#seen_repos[@]}; i++)); do
+              if [ "${seen_repos[$i]}" = "$identity" ]; then
+                if [ "${seen_pools[$i]}" = "$pool" ]; then
+                  seen_pair=1
+                else
+                  duplicate=1
+                fi
+              fi
+            done
+            if [ "$duplicate" -eq 1 ]; then
+              if [ "$duplicate_reported" -eq 0 ]; then
+                echo "TREEHOUSE_POOL_REPORT: duplicate-clone pool $pool (project $repo)"
+                duplicate_reported=1
+              fi
             fi
-          fi
-        done
-        if [ "$duplicate" -eq 1 ]; then
-          if [ "$duplicate_reported" -eq 0 ]; then
-            echo "TREEHOUSE_POOL_REPORT: duplicate-clone pool $pool (project $repo)"
-            duplicate_reported=1
-          fi
-        fi
-        if [ "$seen_pair" -eq 0 ]; then
-          seen_repos+=("$identity")
-          seen_pools+=("$pool")
-        fi
+            if [ "$seen_pair" -eq 0 ]; then
+              seen_repos+=("$identity")
+              seen_pools+=("$pool")
+            fi
+            ;;
+        esac
       fi
       if [ ! -e "${slot%/*}/.fm-slot-owner" ] && [ ! -e "$slot/.fm-slot-owner" ] \
         && [ "$owner_live" -eq 0 ] && [ "$slot_leased" != true ]; then
@@ -1933,6 +1951,11 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
         && network_sweep_authorized 'PR health monitor arming'; then
         "$SCRIPT_DIR/fm-pr-health.sh" arm >/dev/null \
           || echo "MISSING: the PR health monitor could not be armed; owned PRs are not watched"
+      fi
+      if [ -e "$CONFIG/pr-follow" ] && [ -f "$DATA/pr-follows.json" ] \
+        && network_sweep_authorized 'PR follow arming'; then
+        "$SCRIPT_DIR/fm-pr-follow.sh" arm >/dev/null \
+          || echo "MISSING: explicitly followed PRs could not be armed"
       fi
     fi
     # Old handled captain notes and settled process-event rounds move to

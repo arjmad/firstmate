@@ -5,4 +5,4 @@ No upstream proposal: the captain-approval convention is this fork's.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Post the captain's approval on the PR before a customer-visible merge | `bin/fm-pr-merge.sh` (header, argument parse, `require_current_away_authority`, `post_captain_approval`), `.agents/skills/ship-landing/SKILL.md`, `docs/task-lifecycle.md`, `tests/fm-pr-merge.test.sh` (`test_captain_approval_file_*`) | `bin/fm-pr-merge.sh`, `.agents/skills/ship-landing/SKILL.md`, `docs/task-lifecycle.md`, `tests/fm-pr-merge.test.sh` | carried | 0dfc4abc |
+| Post the captain's approval on the PR before a customer-visible merge | `bin/fm-pr-merge.sh` (header, argument parse, `require_current_away_authority`, `post_captain_approval`), `.agents/skills/ship-landing/SKILL.md`, `docs/task-lifecycle.md`, `tests/fm-pr-merge.test.sh` (`test_captain_approval_file_*`) | `bin/fm-pr-merge.sh`, `.agents/skills/ship-landing/SKILL.md`, `docs/task-lifecycle.md`, `tests/fm-pr-merge.test.sh` | carried | 9ac0288e |

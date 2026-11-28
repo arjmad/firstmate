@@ -4,4 +4,4 @@ Why: the "CI is the proof" ruling (`2026-11-10-firstmate-ci-is-the-proof.md`) as
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| A worker adds the `full-ci` label when its change touches a shared library script | `.agents/skills/firstmate-coding-guidelines/SKILL.md` (Repo style rules) | `.agents/skills/firstmate-coding-guidelines/SKILL.md` | carried | 427056c4 |
+| A worker adds the `full-ci` label when its change touches a shared library script | `.agents/skills/firstmate-coding-guidelines/SKILL.md` (Repo style rules) | `.agents/skills/firstmate-coding-guidelines/SKILL.md` | carried | 9ac0288e |

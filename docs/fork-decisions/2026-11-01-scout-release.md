@@ -6,5 +6,5 @@ No upstream proposal: it composes the fork's scout board handover (2026-10-27) w
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Firstmate releases a scout at report time, holds its calls through the completion gate bound to its board, and dispatches a fresh ship on the answer | `.agents/skills/scout-completion/SKILL.md` | the scout outcome and promotion procedure | carried | 427056c4 |
-| The scout brief puts a question its finished report leaves in the report and declares done instead of waiting, hands its board over at done, and names a fresh ship rather than promotion | `bin/fm-brief.sh` (scout rule 6, `LAVISH_LINE`, scout Definition of done) | scout brief text | carried | 427056c4 |
+| Firstmate releases a scout at report time, holds its calls through the completion gate bound to its board, and dispatches a fresh ship on the answer | `.agents/skills/scout-completion/SKILL.md` | the scout outcome and promotion procedure | carried | 9ac0288e |
+| The scout brief puts a question its finished report leaves in the report and declares done instead of waiting, hands its board over at done, and names a fresh ship rather than promotion | `bin/fm-brief.sh` (scout rule 6, `LAVISH_LINE`, scout Definition of done) | scout brief text | carried | 9ac0288e |

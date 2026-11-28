@@ -5,6 +5,6 @@ No upstream proposal yet: the floor follows Arjun's own working method.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Short-loop floor text | `bin/fm-dod-lib.sh` (`fm_dod_short_loop_block`), `tests/fm-dod-lib.test.sh` | same file | carried | 427056c4 |
-| Ship and scout briefs carry the floor unless poteto-mode | `bin/fm-brief.sh`, `tests/fm-brief.test.sh` | same file | carried | 427056c4 |
-| Promoted scouts carry the floor | `bin/fm-promote.sh` | same file | carried | 427056c4 |
+| Short-loop floor text | `bin/fm-dod-lib.sh` (`fm_dod_short_loop_block`), `tests/fm-dod-lib.test.sh` | same file | carried | 9ac0288e |
+| Ship and scout briefs carry the floor unless poteto-mode | `bin/fm-brief.sh`, `tests/fm-brief.test.sh` | same file | carried | 9ac0288e |
+| Promoted scouts carry the floor | `bin/fm-promote.sh` | same file | carried | 9ac0288e |

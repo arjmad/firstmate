@@ -6,4 +6,4 @@ This narrows the `--also` part of the [2026-11-27 record](2026-11-27-audit-lande
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| A tool prints each audit-id prefix's next free number across earlier audits and refuses an audit record that reuses one; landed-by's `--also` help reads as a safety net | `bin/fm-audit-ids.py` (new), `tests/fm-audit-ids.test.sh` (new), `bin/fm-audit-landed-by.py` (`--also` help), `tests/fm-audit-landed-by.test.sh` (`test_unique_ids_need_no_also`), `bin/fm-test-run.sh` (serial weight hint), `docs/scripts.md` | `bin/fm-test-run.sh`, `docs/scripts.md` | carried | 427056c4 |
+| A tool prints each audit-id prefix's next free number across earlier audits and refuses an audit record that reuses one; landed-by's `--also` help reads as a safety net | `bin/fm-audit-ids.py` (new), `tests/fm-audit-ids.test.sh` (new), `bin/fm-audit-landed-by.py` (`--also` help), `tests/fm-audit-landed-by.test.sh` (`test_unique_ids_need_no_also`), `bin/fm-test-run.sh` (serial weight hint), `docs/scripts.md` | `bin/fm-test-run.sh`, `docs/scripts.md` | conflicted | 9ac0288e |

@@ -6,4 +6,4 @@ No upstream proposal: the noticed queue is this fork's own patch.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| `fm-noticed.sh top3` and its `state/noticed/picked` record are removed, so no unseen row is labelled `top idea`; the skill's Monday sweep returns each passing idea filed that week as one line for the triage row | `bin/fm-noticed.sh` (header, `cmd_top3` removed), `tests/fm-noticed.test.sh`, `.agents/skills/noticed-queue/SKILL.md` (Monday sweep and triage, The idea bar, Weekly exploration scout), `docs/scripts.md` | none (fork-only script and skill) | carried | 427056c4 |
+| `fm-noticed.sh top3` and its `state/noticed/picked` record are removed, so no unseen row is labelled `top idea`; the skill's Monday sweep returns each passing idea filed that week as one line for the triage row | `bin/fm-noticed.sh` (header, `cmd_top3` removed), `tests/fm-noticed.test.sh`, `.agents/skills/noticed-queue/SKILL.md` (Monday sweep and triage, The idea bar, Weekly exploration scout), `docs/scripts.md` | none (fork-only script and skill) | carried | 9ac0288e |

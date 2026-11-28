@@ -12,9 +12,9 @@ No upstream proposal: the two-account drain, its quota watch and the start comma
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Account drain: move check, helm handover, both-low answer, capability marker | `bin/fm-account-drain.sh`, `tests/fm-account-drain.test.sh` | none (fork-owned script) | carried | 427056c4 |
-| Session start records the helm's account | `bin/fm-session-start.sh` (locked side-band step) | same file | carried | 427056c4 |
-| Spawn refuses a fresh Claude ship or scout while both accounts are low, and names an account handover holding the task set | `bin/fm-spawn.sh` | same file | carried | 427056c4 |
-| The `account-handover` task-set lock role | `bin/fm-wake-lib.sh` (`fm_lock_set_role`) | same function | carried | 427056c4 |
-| Dispatch routes ships and scouts to the spill profile while both accounts are low | `.agents/skills/harness-adapters/references/common/dispatch.md` | same file | carried | 427056c4 |
-| `config/account-drain` schema | `docs/configuration.md` | same file | carried | 427056c4 |
+| Account drain: move check, helm handover, both-low answer, capability marker | `bin/fm-account-drain.sh`, `tests/fm-account-drain.test.sh` | none (fork-owned script) | carried | 9ac0288e |
+| Session start records the helm's account | `bin/fm-session-start.sh` (locked side-band step) | same file | carried | 9ac0288e |
+| Spawn refuses a fresh Claude ship or scout while both accounts are low, and names an account handover holding the task set | `bin/fm-spawn.sh` | same file | carried | 9ac0288e |
+| The `account-handover` task-set lock role | `bin/fm-wake-lib.sh` (`fm_lock_set_role`) | same function | carried | 9ac0288e |
+| Dispatch routes ships and scouts to the spill profile while both accounts are low | `.agents/skills/harness-adapters/references/common/dispatch.md` | same file | carried | 9ac0288e |
+| `config/account-drain` schema | `docs/configuration.md` | same file | carried | 9ac0288e |

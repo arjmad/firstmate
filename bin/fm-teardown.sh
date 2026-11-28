@@ -2506,6 +2506,31 @@ teardown_note_dirty_return() {
   printf '%s\n' "$residue" | sed 's/^/  /' >&2
 }
 
+# Reclaim a returned pool slot's disk: `treehouse return` resets tracked state
+# but leaves every git-ignored build artifact (node_modules, .next, dist,
+# Electron builds) behind, so pools only ever grow across finished tasks. Runs
+# only after a successful return of a slot this task actually held
+# ($wt_pool_slot = 1 at the call site), never on a slot that was not a
+# Treehouse pool slot to begin with. `treehouse destroy` is safe by default -
+# it removes only a merged, clean, idle, unleased worktree and otherwise skips
+# with a nonzero exit - so no extra landed-work check is needed here; a skip or
+# failure is a warning, not a teardown failure, because the slot already made
+# it back to the pool. Off by default: opt in home-wide with the
+# config/reclaim-pool-slots presence flag (see docs/configuration.md "Pool
+# slot reclaim"). Unconfigured teardown never destroys anything here.
+teardown_destroy_pool_slot() {  # <dir> <cd_dir> <label>
+  local dir=$1 cd_dir=$2 label=$3 out
+  [ -e "$CONFIG/reclaim-pool-slots" ] || return 0
+  command -v treehouse >/dev/null 2>&1 || return 0
+  if out=$( ( cd "$cd_dir" && treehouse destroy "$dir" --yes ) 2>&1 ); then
+    [ -n "$out" ] && printf '%s\n' "$out"
+    return 0
+  fi
+  echo "warning: treehouse destroy left pool slot for $label ($dir) in the pool; slot not removed:" >&2
+  [ -n "$out" ] && printf '%s\n' "$out" | sed 's/^/  /' >&2
+  return 0
+}
+
 # A worker may have pushed from another checkout, so tracking refs that do not
 # show the work prove nothing until they are refreshed. Runs at most once per
 # teardown, through bin/fm-dod-lib.sh's fm_dod_refresh_remote_refs, which owns
@@ -3278,6 +3303,24 @@ safe_rm_rf() {
   rm -rf -- "$target"
 }
 
+# Drop the per-home Treehouse pool root for a secondmate whose home is already
+# gone. The path must be the one fm_treehouse_spawn_root printed: an absolute
+# directory sitting directly under an fm-secondmate/ parent. Child task slots
+# are returned before this runs; this only removes that leftover root.
+remove_secondmate_treehouse_pool() {  # <pool-root>
+  local pool=$1 parent
+  [ -n "$pool" ] || return 0
+  case "$pool" in
+    /*) ;;
+    *) return 0 ;;
+  esac
+  [ -d "$pool" ] && [ ! -L "$pool" ] || return 0
+  parent=$(dirname "$pool")
+  [ "$(basename "$parent")" = fm-secondmate ] || return 0
+  [ -d "$parent" ] && [ ! -L "$parent" ] || return 0
+  rm -rf -- "$pool"
+}
+
 safe_rm_rf_child_worktree() {
   local target=$1 project=$2
   validate_child_worktree_for_removal "$target" "$project" >/dev/null || return 1
@@ -3350,11 +3393,12 @@ t3code_secondmate_home_shutdown_barrier() {  # <home> <task-id>
 }
 
 remove_firstmate_home() {  # <home> <label> <task-id> <backend>
-  local home=$1 label=$2 expected_id=${3:-} backend=${4:-} abs_home_path process_event_backup
+  local home=$1 label=$2 expected_id=${3:-} backend=${4:-} abs_home_path process_event_backup pool_root
   [ -n "$home" ] || return 0
   [ -e "$home" ] || return 0
   abs_home_path=$(validate_firstmate_home_for_removal "$home" "$label" "$expected_id") || return 1
   [ -n "$abs_home_path" ] || return 0
+  pool_root=$(fm_treehouse_spawn_root "$abs_home_path") || pool_root=
   # A T3 secondmate's home carries the environment its spawn wrote there.
   # Remove it after home validation and before returning its pooled Git index.
   if [ "$backend" = t3code ]; then
@@ -3385,10 +3429,12 @@ remove_firstmate_home() {  # <home> <label> <task-id> <backend>
       return 1
     }
     [ -z "$process_event_backup" ] || rm -rf -- "$process_event_backup"
+    remove_secondmate_treehouse_pool "$pool_root"
     return 0
   fi
   if safe_rm_rf "$abs_home_path" "$label"; then
     [ -z "$process_event_backup" ] || rm -rf -- "$process_event_backup"
+    remove_secondmate_treehouse_pool "$pool_root"
     return 0
   fi
   restore_firstmate_home_process_events "$abs_home_path" "$label" "$process_event_backup" || return $?
@@ -3468,7 +3514,7 @@ restore_firstmate_home_process_events() {
   if [ ! -f "$runner" ] || [ -L "$runner" ] || [ ! -x "$runner" ]; then
     runner="$SCRIPT_DIR/fm-procevent.sh"
   fi
-  if ! FM_HOME="$home" FM_ROOT_OVERRIDE="$FM_ROOT" "$runner" reconcile >/dev/null; then
+  if ! FM_HOME="$home" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$home/state" "$runner" reconcile >/dev/null; then
     echo "error: process-event restoration could not rearm $label $home; active waits may remain retired; recover registrations from $backup" >&2
     return "$TEARDOWN_PROCEVENT_RESTORE_FAILED"
   fi
@@ -3482,7 +3528,7 @@ cleanup_firstmate_home_process_events() {
     echo "REFUSED: $label $home has process-event state but no sweep-capable bin/fm-procevent.sh; restore the home script and rerun teardown" >&2
     return 1
   fi
-  if ! FM_HOME="$home" FM_ROOT_OVERRIDE="$home" "$runner" sweep-home; then
+  if ! FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_STATE_OVERRIDE="$home/state" "$runner" sweep-home; then
     echo "REFUSED: process-event cleanup is incomplete for $label $home; preserving the home, lease, and retirement records for retry" >&2
     return 1
   fi
@@ -3499,7 +3545,7 @@ preflight_firstmate_home_process_events() {
     echo "REFUSED: $label $home has process-event state but no sweep-capable bin/fm-procevent.sh; restore the home script and rerun teardown" >&2
     return 1
   fi
-  if ! FM_HOME="$home" FM_ROOT_OVERRIDE="$home" "$runner" sweep-home --preflight >/dev/null; then
+  if ! FM_HOME="$home" FM_ROOT_OVERRIDE="$home" FM_STATE_OVERRIDE="$home/state" "$runner" sweep-home --preflight >/dev/null; then
     echo "REFUSED: process-event cleanup cannot safely proceed for $label $home; preserving the home, lease, and retirement records for retry" >&2
     return 1
   fi
@@ -4841,12 +4887,15 @@ elif [ -d "$WT" ] && [ "$KIND" != secondmate ]; then
     echo "error: treehouse return failed for worktree $WT; teardown aborted" >&2
     exit 1
   }
-  [ "$wt_pool_slot" = 0 ] || teardown_note_dirty_return "$WT"
   # The slot is back in the pool, so this task's claim on it is spent. Dropping
   # it here - and only after a return that succeeded - keeps a returned slot
   # unclaimed until its next holder claims it, and leaves the claim in place
   # whenever the return did not actually happen.
   fm_treehouse_slot_owner_release "$WT" "$ID"
+  if [ "$wt_pool_slot" = 1 ]; then
+    teardown_note_dirty_return "$WT"
+    teardown_destroy_pool_slot "$WT" "$PROJ" "worktree"
+  fi
 fi
 
 # Companion worktrees (see the header): every one already passed its ownership

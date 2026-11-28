@@ -5,4 +5,4 @@ No upstream proposal: the captain-approval convention is this fork's.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Refuse a customer-visible sites PR without the captain's approval | `bin/fm-pr-merge.sh` (header, `pr_body_visual_review_none`, `require_visual_review_approval`), `.agents/skills/ship-landing/SKILL.md`, `docs/task-lifecycle.md`, `tests/fm-pr-merge.test.sh` (`test_sites_visual_review_*`) | `bin/fm-pr-merge.sh`, `.agents/skills/ship-landing/SKILL.md`, `docs/task-lifecycle.md`, `tests/fm-pr-merge.test.sh` | carried | 58eee9b7 |
+| Refuse a customer-visible sites PR without the captain's approval | `bin/fm-pr-merge.sh` (header, `pr_body_visual_review_none`, `require_visual_review_approval`), `.agents/skills/ship-landing/SKILL.md`, `docs/task-lifecycle.md`, `tests/fm-pr-merge.test.sh` (`test_sites_visual_review_*`) | `bin/fm-pr-merge.sh`, `.agents/skills/ship-landing/SKILL.md`, `docs/task-lifecycle.md`, `tests/fm-pr-merge.test.sh` | carried | 9ac0288e |

@@ -6,6 +6,6 @@ No upstream proposal: the inbox and test fixes are small enough to carry until a
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| `reply` prints its usage for `-h` or `--help` in the note-id or body position instead of recording the flag as the reply | `bin/fm-inbox.sh` (`cmd_reply`), `tests/fm-inbox.test.sh` (reply help case) | `bin/fm-inbox.sh` (`cmd_reply`), `tests/fm-inbox.test.sh` | carried | 427056c4 |
-| The secondmate-restart test's EXIT trap runs `fm_test_cleanup` instead of a plain `rm -rf` | `tests/fm-secondmate-restart.test.sh` (EXIT trap) | `tests/fm-secondmate-restart.test.sh` | carried | 427056c4 |
-| `AGENTS.md` drops six lines that only repeated a skill description's load trigger | `AGENTS.md` (sections 2, 3, 6, 7, 8) | `AGENTS.md` | carried | 427056c4 |
+| `reply` prints its usage for `-h` or `--help` in the note-id or body position instead of recording the flag as the reply | `bin/fm-inbox.sh` (`cmd_reply`), `tests/fm-inbox.test.sh` (reply help case) | `bin/fm-inbox.sh` (`cmd_reply`), `tests/fm-inbox.test.sh` | carried | 9ac0288e |
+| The secondmate-restart test's EXIT trap runs `fm_test_cleanup` instead of a plain `rm -rf` | `tests/fm-secondmate-restart.test.sh` (EXIT trap) | `tests/fm-secondmate-restart.test.sh` | carried | 9ac0288e |
+| `AGENTS.md` drops six lines that only repeated a skill description's load trigger | `AGENTS.md` (sections 2, 3, 6, 7, 8) | `AGENTS.md` | carried | 9ac0288e |

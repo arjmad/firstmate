@@ -6,4 +6,4 @@ No upstream proposal.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| An eligible Claude helm session exports its home to `CLAUDE_ENV_FILE` at session start | `bin/fm-sessionstart-run.sh` (`fm_export_home_to_claude_env`), `tests/fm-sessionstart-nudge.test.sh`, `docs/sessionstart-nudge.md` | same files | carried | 427056c4 |
+| An eligible Claude helm session exports its home to `CLAUDE_ENV_FILE` at session start | `bin/fm-sessionstart-run.sh` (`fm_export_home_to_claude_env`), `tests/fm-sessionstart-nudge.test.sh`, `docs/sessionstart-nudge.md` | same files | carried | 9ac0288e |

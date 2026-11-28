@@ -5,4 +5,4 @@ No upstream proposal yet: upstream has the same two owners.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The layout skill defers to the doc section and narrows its trigger | `.agents/skills/operational-home-layout/SKILL.md` (description, opening) | same file | carried | 427056c4 |
+| The layout skill defers to the doc section and narrows its trigger | `.agents/skills/operational-home-layout/SKILL.md` (description, opening) | same file | carried | 9ac0288e |

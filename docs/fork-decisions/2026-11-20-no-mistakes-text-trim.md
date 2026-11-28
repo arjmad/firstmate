@@ -7,6 +7,6 @@ No upstream proposal: upstream still ships the pipeline as its default delivery 
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| New projects default to direct-PR with no no-mistakes initialization step | `.agents/skills/project-management/SKILL.md` (Delivery posture menu and default, Add or clone, Create, Initialize removed) | same file | carried | 427056c4 |
-| Ship intake and the selected-path text drop the no-mistakes branches and name the `local-only` exception | `docs/task-lifecycle.md` (Intake, Selected delivery path), `AGENTS.md` (section 7) | `AGENTS.md` | carried | 427056c4 |
-| The self-update and self-repo skills no longer call no-mistakes the delivery gate | `.agents/skills/updatefirstmate/SKILL.md`, `.agents/skills/firstmate-self-repo/SKILL.md` (delivery contract) | same files | carried | 427056c4 |
+| New projects default to direct-PR with no no-mistakes initialization step | `.agents/skills/project-management/SKILL.md` (Delivery posture menu and default, Add or clone, Create, Initialize removed) | same file | carried | 9ac0288e |
+| Ship intake and the selected-path text drop the no-mistakes branches and name the `local-only` exception | `docs/task-lifecycle.md` (Intake, Selected delivery path), `AGENTS.md` (section 7) | `AGENTS.md` | conflicted | 9ac0288e |
+| The self-update and self-repo skills no longer call no-mistakes the delivery gate | `.agents/skills/updatefirstmate/SKILL.md`, `.agents/skills/firstmate-self-repo/SKILL.md` (delivery contract) | same files | carried | 9ac0288e |

@@ -5,5 +5,5 @@ No upstream proposal: the noticed queue is this fork's own patch.
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Teardown files a kept scratch checkout as one routine noticed row | `bin/fm-teardown.sh` (header, scratch prune, kept-checkout filing), `tests/fm-teardown.test.sh` (`test_teardown_deletes_task_data_scratch`, `test_scout_teardown_prints_what_it_noticed`) | same files | carried | 427056c4 |
-| The noticed queue names teardown as a filer and how to settle the row | `bin/fm-noticed.sh` (header), `.agents/skills/noticed-queue/SKILL.md` (Filing), `docs/configuration.md` (data scratch rule) | `docs/configuration.md` | carried | 427056c4 |
+| Teardown files a kept scratch checkout as one routine noticed row | `bin/fm-teardown.sh` (header, scratch prune, kept-checkout filing), `tests/fm-teardown.test.sh` (`test_teardown_deletes_task_data_scratch`, `test_scout_teardown_prints_what_it_noticed`) | same files | carried | 9ac0288e |
+| The noticed queue names teardown as a filer and how to settle the row | `bin/fm-noticed.sh` (header), `.agents/skills/noticed-queue/SKILL.md` (Filing), `docs/configuration.md` (data scratch rule) | `docs/configuration.md` | carried | 9ac0288e |

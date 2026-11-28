@@ -8,5 +8,5 @@ No upstream proposal: the quota probe and the records are this fork's own, and t
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| The pinned-account `claude -p /usage` probe runs from `/` so no project SessionStart hook fires | `bin/fm-quota-snapshot.sh` (`claude_usage`), `tests/fm-quota-snapshot.test.sh` | none (fork-owned script) | carried | 427056c4 |
-| `AGENTS.md` drops the `/stow` and `/updatefirstmate` load restatements, section 10's repeated `captain-hold-lifecycle` pointer, and the section 9 regression example | `AGENTS.md` (sections 6, 9, 10, 12) | same file | carried | 427056c4 |
+| The pinned-account `claude -p /usage` probe runs from `/` so no project SessionStart hook fires | `bin/fm-quota-snapshot.sh` (`claude_usage`), `tests/fm-quota-snapshot.test.sh` | none (fork-owned script) | carried | 9ac0288e |
+| `AGENTS.md` drops the `/stow` and `/updatefirstmate` load restatements, section 10's repeated `captain-hold-lifecycle` pointer, and the section 9 regression example | `AGENTS.md` (sections 6, 9, 10, 12) | same file | carried | 9ac0288e |

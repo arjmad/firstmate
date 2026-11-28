@@ -134,7 +134,7 @@ test_full_companion_pool_defers_before_anything_is_taken() {
   assert_absent "$HOME_DIR/state/$id.meta" "a deferred spawn published a task record"
   assert_absent "$HOME_DIR/data/$id/launch-brief.md" "a deferred spawn rendered a launch brief"
   assert_no_grep "treehouse <get>" "$log" "a deferred spawn asked Treehouse for a worktree"
-  assert_no_grep "treehouse <lease>" "$log" "a deferred spawn leased a worktree"
+  assert_no_grep "<lease> <" "$log" "a deferred spawn leased a worktree"
   [ "$(lease_holder "$JOBS_POOL")" = other-task ] || fail "the deferral changed the companion slot's lease"
 
   id='also-pool-full-mismatch-c1'
@@ -161,7 +161,7 @@ test_refused_companion_lease_shows_treehouse_error() {
   assert_contains "$out" "treehouse could not lease a companion worktree of jobs for task $id: no free worktree in the pool" \
     "the refusal hid Treehouse's own error"
   assert_absent "$HOME_DIR/state/$id.meta" "a refused spawn published a task record"
-  assert_grep "treehouse <lease>" "$log" "the spawn never leased the task's own slot, so its return is untested"
+  assert_grep "<lease> <" "$log" "the spawn never leased the task's own slot, so its return is untested"
   assert_grep "treehouse <return> <--if-lease-holder> <$id>" "$log" "the refused spawn did not return the task's own slot"
   [ -z "$(lease_holder "$CASE_DIR/sample-pool")" ] || fail "a refused spawn kept the task's own slot leased"
   [ "$(lease_holder "$JOBS_POOL")" = other-task ] || fail "the refusal changed the companion slot's lease"

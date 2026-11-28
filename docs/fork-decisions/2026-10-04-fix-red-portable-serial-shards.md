@@ -2,4 +2,4 @@ PR: #50
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
 | --- | --- | --- | --- | --- |
-| Fix red portable serial 2 and serial 9 | `tests/fm-pi-branch-extension.test.sh` | same test | carried | 427056c4 |
+| Fix red portable serial 2 and serial 9 | `tests/fm-pi-branch-extension.test.sh` | same test | carried | 9ac0288e |

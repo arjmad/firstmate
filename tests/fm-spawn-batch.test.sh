@@ -22,9 +22,13 @@ export FM_BACKEND=tmux
 treehouse_test_isolate "$TMP_ROOT" || fail "could not isolate the Treehouse pool root"
 
 # Clear ambient firstmate overrides so the behavior test owns its environment.
+# The scratch home keeps the repo root's own gitignored config (notably
+# config/crew-dispatch.json) from changing the arg-routing behavior under test.
 run_spawn() {
+  local home="$TMP_ROOT/run-spawn-home"
+  mkdir -p "$home/data" "$home/config"
   FM_ROOT_OVERRIDE='' \
-    FM_HOME='' \
+    FM_HOME="$home" \
     FM_STATE_OVERRIDE='' \
     FM_DATA_OVERRIDE='' \
     FM_PROJECTS_OVERRIDE='' \
