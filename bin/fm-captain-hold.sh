@@ -1705,8 +1705,23 @@ close_answered() {  # <task-id> <release-0-or-1>
     write_owner "$1" fleet
   else
     apply_pending_retained_artifact "$1" || return 1
-    tasks_axi "done" "$1" "${RETAINED_CLOSE_ARGS[@]+"${RETAINED_CLOSE_ARGS[@]}"}" >/dev/null
+    tasks_axi "done" "$1" "${RETAINED_CLOSE_ARGS[@]+"${RETAINED_CLOSE_ARGS[@]}"}" >/dev/null || return 1
+    settle_answered_ask "$1"
   fi
+}
+
+# A closed call that waited on an ask to someone outside the fleet (its
+# `Asked:` line) is settled through bin/fm-asks.sh, as any close is, with the
+# captain's first line as the outcome. Its lines go to stderr, and a failure
+# only warns: the call is already answered.
+settle_answered_ask() {  # <task-id>
+  local words
+  [ -x "$SCRIPT_DIR/fm-asks.sh" ] || return 0
+  words=$(printf '%s\n' "$DECISION_TEXT" | sed -n '/[^[:space:]]/{p;q;}' | cut -c1-300)
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" \
+    "$SCRIPT_DIR/fm-asks.sh" settle "$1" done --note "the captain answered it: ${words:-his answer is on the row}" >&2 \
+    || printf 'fm-captain-hold: %s is answered, but its ask was not settled; see the line above\n' "$1" >&2
+  return 0
 }
 
 remove_interrupted_answer_stamp() {  # <task-id>

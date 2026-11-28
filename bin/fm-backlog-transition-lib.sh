@@ -893,14 +893,24 @@ fm_backlog_close_transition() {
 # so a failure only warns and never fails the transition; replay re-runs the
 # close and close-reply skips a note already answered. FM_HANDOFF_CLOSE_REPLY=skip
 # (a forced teardown, whose work may never have landed) writes nothing.
+# A row that carries an `Asked:` line is then settled through bin/fm-asks.sh
+# settle, which reads the closed row itself and records the settlement, so a
+# replay settles nothing twice; its lines go to stderr, and a failure only
+# warns.
 fm_backlog_close_reply() {  # <state-dir> <data-dir> <id> [done flag...]
   local state=$1 data=$2 id=$3
   shift 3
   [ "${FM_HANDOFF_CLOSE_REPLY:-}" != skip ] || return 0
-  [ -x "$FM_BACKLOG_LIB_DIR/fm-inbox.sh" ] || return 0
-  FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" \
-    "$FM_BACKLOG_LIB_DIR/fm-inbox.sh" close-reply "$id" "done" "$@" >/dev/null 2>&1 \
-    || printf 'fm-backlog: %s closed, but its handoff reply was not written; answer it with bin/fm-inbox.sh reply\n' "$id" >&2
+  if [ -x "$FM_BACKLOG_LIB_DIR/fm-inbox.sh" ]; then
+    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" \
+      "$FM_BACKLOG_LIB_DIR/fm-inbox.sh" close-reply "$id" "done" "$@" >/dev/null 2>&1 \
+      || printf 'fm-backlog: %s closed, but its handoff reply was not written; answer it with bin/fm-inbox.sh reply\n' "$id" >&2
+  fi
+  if [ -x "$FM_BACKLOG_LIB_DIR/fm-asks.sh" ]; then
+    FM_STATE_OVERRIDE="$state" FM_DATA_OVERRIDE="$data" \
+      "$FM_BACKLOG_LIB_DIR/fm-asks.sh" settle "$id" "done" "$@" >&2 \
+      || printf 'fm-backlog: %s closed, but its ask was not settled; see the line above\n' "$id" >&2
+  fi
   return 0
 }
 

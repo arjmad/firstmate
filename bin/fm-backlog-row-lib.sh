@@ -45,6 +45,16 @@
 # this exact `Due:` format, and bin/fm-fleet-snapshot.sh reads the `Batch:`
 # line with the same pattern.
 #
+# A row that waits on an ask to someone outside the fleet names that person
+# on one more such line (fork patch, docs/fork-decisions/2026-11-28-asks-to-outside-people.md):
+#
+#   Asked: <person> YYYY-MM-DD [<ref>]
+#
+# <person> is one of FM_BACKLOG_ASK_PEOPLE, the date is the day the ask went
+# out, and <ref> is where the ask lives: for sapna the id of the envelope
+# firstmate left Nova, for sunita her list's item. bin/fm-asks.sh owns what
+# each person's close does and lists the open asks with their age.
+#
 # A ship's row may also name the open rows its work carries, so its landing
 # closes or rewrites them (fork patch,
 # docs/fork-decisions/2026-11-26-landing-covers.md):
@@ -120,20 +130,37 @@ fm_backlog_title_dated() {
 # none: the writers put that line after quoted text, such as the captain's
 # recorded words, that still holds a line of the field's shape, so the quoted
 # line never reads as the row's own.
-fm_backlog_row_field_pattern() {  # <due|batch>
+fm_backlog_row_field_pattern() {  # <due|batch|asked>
   case "$1" in
     due) printf '%s' '^[[:space:]]*Due:[[:space:]]*([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]|-)[[:space:]]*$' ;;
     batch) printf '%s' '^[[:space:]]*Batch:[[:space:]]*((place:)?[a-z0-9][a-z0-9-]*|board:[a-z0-9][a-z0-9._-]*|-)[[:space:]]*$' ;;
+    asked) printf '%s' '^[[:space:]]*Asked:[[:space:]]*((sapna|sunita) [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]( [A-Za-z0-9][A-Za-z0-9._-]*)?|-)[[:space:]]*$' ;;
     *) return 1 ;;
   esac
 }
 
-fm_backlog_row_field_label() {  # <due|batch>
+fm_backlog_row_field_label() {  # <due|batch|asked>
   case "$1" in
     due) printf 'Due' ;;
     batch) printf 'Batch' ;;
+    asked) printf 'Asked' ;;
     *) return 1 ;;
   esac
+}
+
+# The people an `Asked:` line may name; keep in step with its pattern above.
+# shellcheck disable=SC2034  # read by the scripts that source this file
+FM_BACKLOG_ASK_PEOPLE='sapna sunita'
+
+# fm_backlog_asked_valid <value>: succeed for an `Asked:` value a writer may
+# record, `<person> YYYY-MM-DD [<ref>]`, single-spaced.
+fm_backlog_asked_valid() {
+  local person date ref extra
+  read -r person date ref extra <<<"${1:-}"
+  [ -z "$extra" ] && [ "${1:-}" = "$person $date${ref:+ $ref}" ] || return 1
+  case "$person" in sapna|sunita) ;; *) return 1 ;; esac
+  fm_backlog_date_valid "$date" || return 1
+  [ -z "$ref" ] || [[ "$ref" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,119}$ ]]
 }
 
 # fm_backlog_row_field_of_body <due|batch> <decoded-body>: print the recorded
@@ -221,7 +248,7 @@ fm_backlog_row_field_body_append() {
   fi
   if [ -z "$kept" ]; then
     printf '%s: %s\n' "$label" "$value"
-  elif printf '%s\n' "$kept" | tail -1 | grep -Eq '^(Due|Batch): '; then
+  elif printf '%s\n' "$kept" | tail -1 | grep -Eq '^(Due|Batch|Asked): '; then
     # Row fields written together stay one block.
     printf '%s\n%s: %s\n' "$kept" "$label" "$value"
   else
