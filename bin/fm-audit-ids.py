@@ -34,9 +34,10 @@ Records:
   `data/deep-audit-1126/`). A decision record or findings list counts its ids
   as above; any other file (walk-answers.md, a JSON of another shape) is read
   as text, and an id appearing in it as a whole token (a1-6 does not match
-  a1-60, xa1-6 or a1-6-followup) counts for a prefix a decision record or
-  --prefix names. Counting an id an old record only cites is harmless: it
-  only moves the next free number higher.
+  a1-60, xa1-6 or a1-6-followup) counts: for next, under a prefix a decision
+  record or --prefix names; for check, whatever its prefix. Counting an id an
+  old record only cites is harmless: it only moves the next free number higher
+  or refuses a number another is free for.
   check skips the audit record itself and a prior directory that holds it,
   because that directory is the same audit's, so a glob over every audit
   directory may include the current one; any other file named is a prior.
@@ -95,7 +96,8 @@ def structured_ids(path: str, text: str) -> list[str] | None:
     except json.JSONDecodeError:
         return None
     if isinstance(data, dict) and all(isinstance(v, dict) for v in data.values()):
-        return list(data)
+        # Every key in file order, a repeated one included: json.loads keeps only the last.
+        return [key for key, _ in json.loads(text, object_pairs_hook=lambda pairs: pairs)]
     return None
 
 

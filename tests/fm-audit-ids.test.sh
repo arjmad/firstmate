@@ -114,6 +114,11 @@ test_check_lists_each_shared_or_repeated_id() {
   assert_contains "$out" "a7-040 (listed twice, as a7-40 and a7-040)" "a repeated number is listed: $out"
   assert_not_contains "$out" "a1-11" "a free id is not listed: $out"
   assert_equals "$before" "$(cksum <"$dir/now/findings.jsonl")" "check writes nothing"
+  # A decisions.json key written twice is a repeat, though a JSON load keeps only the last.
+  printf '{\n "a7-41": {"title": "one"},\n "a7-41": {"title": "two"}\n}\n' >"$dir/now/decisions.json"
+  code=0; out=$("$TOOL" check "$dir/now/decisions.json" 2>&1) || code=$?
+  expect_code 1 "$code" "a repeated decisions.json key"
+  assert_contains "$out" "a7-41 (listed twice, as a7-41 and a7-41)" "a repeated key is listed: $out"
   # A file named on its own is a prior even beside the record; only a directory that holds it is skipped.
   decisions "$dir/now/staged.json" a1-11
   code=0; out=$("$TOOL" check "$dir/now/findings.jsonl" "$dir/now/staged.json" 2>&1) || code=$?
