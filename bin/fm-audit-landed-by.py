@@ -15,11 +15,14 @@ Inputs:
   --since, --until  the merge-date window to search, inclusive; --since is
                     the audit's start date, --until defaults to today (UTC).
   --also            another audit's decisions.json; repeat it for more than
-                    one. Audits reuse some ids (the a7-NN run restarts each
-                    audit), so a PR naming a shared id may land the other
-                    audit's finding: an id any --also file also holds is
-                    never stamped, and the summary lists each one a PR
-                    named, with its PRs, for the helm to settle by hand.
+                    one. A safety net for ids two audits share: an id any
+                    --also file also holds is never stamped, and the summary
+                    lists each one a PR named, with its PRs, for the helm to
+                    settle by hand. Ids bin/fm-audit-ids.py numbers are
+                    unique across audits, so a run over such an audit needs
+                    none; the 2026-11-24 and 2026-11-26 audits each
+                    restarted the a7 run at a7-01, so a run over either
+                    passes the other as --also.
 
 Source: every PR `gh search prs --merged --owner ... --merged-at
 <since>..<until>` returns whose state reads merged. A window that fills
