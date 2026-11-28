@@ -20,9 +20,9 @@ Inputs:
                     lists each one a PR named, with its PRs, for the helm to
                     settle by hand. Ids bin/fm-audit-ids.py numbers are
                     unique across audits, so a run over such an audit needs
-                    none; the 2026-11-24 and 2026-11-26 audits each
-                    restarted the a7 run at a7-01, so a run over either
-                    passes the other as --also.
+                    none. The 2026-11-19, 2026-11-24 and 2026-11-26 audits
+                    each numbered the a7 run from a7-01, so a run over any
+                    of them passes the other two as --also.
 
 Source: every PR `gh search prs --merged --owner ... --merged-at
 <since>..<until>` returns whose state reads merged. A window that fills

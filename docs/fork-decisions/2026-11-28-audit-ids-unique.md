@@ -1,7 +1,7 @@
 2026-11-28: Arjun ruled at the helm ("Build it") that audit finding ids are numbered uniquely across audits, so the landed-by tool's `--also` becomes a safety net and not a required input.
-Every prefix but a7 already continued its numbers from audit to audit, while the a7 run restarted at a7-01 in the 2026-11-24 and 2026-11-26 audits, so PRs for the later audit's a7-05 and a7-07 named the earlier audit's ids too.
+Every prefix but a7 already continued its numbers from audit to audit, while the a7 run started again at a7-01 in the 2026-11-24 and 2026-11-26 audits after the 2026-11-19 audit, so PRs for a later audit's a7-05 and a7-07 named an earlier audit's ids too.
 Decision: `bin/fm-audit-ids.py next` prints each prefix's first free number past every earlier audit's records, for the auditors' briefs, and `check` refuses an audit record whose ids an earlier audit holds, because the auditors that mint ids are agents and a convention alone already failed once.
-Ids already filed keep their numbers; `--also` stays for the two audits that share the restarted a7 ids.
+Ids already filed keep their numbers; `--also` stays for those three audits, which share a7 ids.
 This narrows the `--also` part of the [2026-11-27 record](2026-11-27-audit-landed-by-merged-prs.md).
 
 | What | Files or functions | Upstream code touched | Status | Last checked sync |
