@@ -37,9 +37,9 @@ Records:
   a1-60, xa1-6 or a1-6-followup) counts for a prefix a decision record or
   --prefix names. Counting an id an old record only cites is harmless: it
   only moves the next free number higher.
-  check skips a prior record that is the audit record itself or sits in the
-  audit record's directory, because that is the same audit's record, so a
-  glob over every audit directory may include the current one.
+  check skips the audit record itself and a prior directory that holds it,
+  because that directory is the same audit's, so a glob over every audit
+  directory may include the current one; any other file named is a prior.
 
 Exit codes: 0 next printed, or check found no shared id; 1 check found a
 shared or repeated id, or a refusal (a missing or unreadable record, an audit
@@ -94,7 +94,7 @@ def structured_ids(path: str, text: str) -> list[str] | None:
         data = json.loads(text)
     except json.JSONDecodeError:
         return None
-    if isinstance(data, dict) and data and all(isinstance(v, dict) for v in data.values()):
+    if isinstance(data, dict) and all(isinstance(v, dict) for v in data.values()):
         return list(data)
     return None
 
@@ -194,8 +194,8 @@ def cmd_check(argv: list[str]) -> int:
         raise Refusal(f"{record}: not <prefix>-<number> id(s): {', '.join(bad)}")
     own = os.path.realpath(record)
     own_dir = os.path.dirname(own)
-    files = [p for p in prior_files(priors)
-             if os.path.realpath(p) != own and os.path.dirname(os.path.realpath(p)) != own_dir]
+    priors = [p for p in priors if not (os.path.isdir(p) and os.path.realpath(p) == own_dir)]
+    files = [p for p in prior_files(priors) if os.path.realpath(p) != own]
     held = Holdings(files)
     problems = []
     seen: dict[tuple[str, int], str] = {}

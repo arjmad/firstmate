@@ -12,7 +12,8 @@
 #     audits that both hold a7-01 (the a7 run that used to restart).
 #   - check lists each id a prior record holds (a7-5 and a7-05 are one id) or
 #     the record repeats, exits 1, and names the record that holds it; it
-#     skips the audit's own directory, so a glob over every audit may include it.
+#     skips the audit's own directory, so a glob over every audit may include
+#     it, but counts a file named on its own even beside the record.
 #   - It reads a findings list (.jsonl with id) as well as decisions.json, and
 #     refuses a missing record, a record of neither shape and an id of another
 #     shape; a bad command line exits 2; it writes nothing.
@@ -113,6 +114,11 @@ test_check_lists_each_shared_or_repeated_id() {
   assert_contains "$out" "a7-040 (listed twice, as a7-40 and a7-040)" "a repeated number is listed: $out"
   assert_not_contains "$out" "a1-11" "a free id is not listed: $out"
   assert_equals "$before" "$(cksum <"$dir/now/findings.jsonl")" "check writes nothing"
+  # A file named on its own is a prior even beside the record; only a directory that holds it is skipped.
+  decisions "$dir/now/staged.json" a1-11
+  code=0; out=$("$TOOL" check "$dir/now/findings.jsonl" "$dir/now/staged.json" 2>&1) || code=$?
+  expect_code 1 "$code" "a named file beside the record"
+  assert_contains "$out" "a1-11 (a prior audit holds it: $dir/now/staged.json)" "a named file beside the record counts: $out"
   pass "audit-ids: check lists each id a prior record holds or the record repeats, naming its holder"
 }
 
