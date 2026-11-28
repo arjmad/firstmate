@@ -315,10 +315,15 @@
 # <word> (a known word, chosen by the caller from the task) whose body has no
 # Class line appends that one line, after one blank line, to the body exactly
 # as the forge holds it, under the away record's lock, then reads the body
-# back and refuses unless it is the old body plus that line; every live gate
-# then reads the pull request again, once, since the edit can start a
-# workflow at the same head, and the merge runs as usual. That is the only PR
-# write away authority makes before a merge. The flag writes nothing and
+# back and refuses unless it is the old body plus that line. The edit can
+# start a workflow at the same head, which GitHub queues asynchronously, so
+# the run then waits FM_PR_GITHUB_CLASS_SETTLE seconds (default 20, at most
+# 60), a bound rather than a proof that every such workflow has registered,
+# and every live gate reads the pull request again, once, so a check that
+# registered as pending or red refuses; the merge then runs as usual. A run
+# writes at most once and never after the merge lock is held, and a line gone
+# again on a later read refuses and holds for the captain's return. That is
+# the only PR write away authority makes before a merge. The flag writes nothing and
 # refuses for a body that already carries another Class word or an invalid
 # one, a body that changed since the live verify, a body where the appended
 # line would not read as that word (an unclosed code fence), or a task whose
@@ -2394,8 +2399,11 @@ require_visual_review_approval() {
 # The effort-class gate (see the header's effort-class paragraph), run just
 # before the door gate on every forge. FM_PR_BODY is the body the live verify
 # read.
+# --read-only (the re-check after the merge lock is held) never writes.
 require_pr_class() {
-  local class status=0
+  local class status=0 may_write=true
+  [ "${1:-}" != --read-only ] || may_write=false
+  [ "$FM_PR_CLASS_WRITTEN" = false ] || may_write=false
   if ! fm_pr_class_brief_requires "$DATA/$ID/brief.md"; then
     [ -z "$ADD_CLASS" ] || {
       printf "error: refusing to merge %s: task %s's brief asks for no Class line, so --add-class has nothing to add; merge without it\n" "$URL" "$ID" >&2
@@ -2408,8 +2416,8 @@ require_pr_class() {
     return 1
   fi
   class=$(printf '%s\n' "$FM_PR_BODY" | fm_pr_class_of_body) || status=$?
-  # One write per run: a line gone again on a later read refuses, read-only.
-  if [ "$status" -eq 1 ] && [ -n "$ADD_CLASS" ] && [ "$FM_PR_CLASS_WRITTEN" = false ]; then
+  # One write per run, before the merge lock: a line gone again later refuses.
+  if [ "$status" -eq 1 ] && [ -n "$ADD_CLASS" ] && [ "$may_write" = true ]; then
     github_add_class_line || return 1
     status=0
     class=$(printf '%s\n' "$FM_PR_BODY" | fm_pr_class_of_body) || status=$?
@@ -2428,6 +2436,10 @@ require_pr_class() {
   esac
   if [ "$status" -ne 1 ] && [ -n "$ADD_CLASS" ]; then
     echo "error: --add-class only adds a missing line, never changes one, so this body waits for the captain's return" >&2
+    return 1
+  fi
+  if [ -n "$ADD_CLASS" ]; then
+    echo "error: the Class line went missing after this run read or added it, so --add-class writes no more and this PR waits for the captain's return" >&2
     return 1
   fi
   if [ "$status" -eq 1 ] && [ "$FM_PR_AWAY_POSTURE" = true ] && [ "$PROVIDER" = github ]; then
@@ -3076,10 +3088,17 @@ case "$PROVIDER" in
         exit 1
       fi
       require_pr_class || exit 1
-      # The Class edit can start a workflow at the same head, so every live
-      # gate reads the pull request again, once, before the merge.
+      # The Class edit can start a workflow at the same head, which GitHub
+      # queues asynchronously, so the run waits a bounded settle time and
+      # every live gate reads the pull request again, once, before the merge.
       if [ "$FM_PR_CLASS_WRITTEN" = true ] && [ "$FM_PR_CLASS_REVERIFIED" = false ]; then
         FM_PR_CLASS_REVERIFIED=true
+        class_settle=${FM_PR_GITHUB_CLASS_SETTLE:-20}
+        case "$class_settle" in
+          [0-9] | [1-5][0-9] | 60) ;;
+          *) class_settle=20 ;;
+        esac
+        sleep "$class_settle"
         continue
       fi
       require_door_authority || exit 1
@@ -3115,7 +3134,7 @@ case "$PROVIDER" in
               "$FM_PR_GITHUB_BASE" "$FM_PR_MERGE_HEAD" >&2
           exit 1
         fi
-        require_pr_class || exit 1
+        require_pr_class --read-only || exit 1
         require_visual_review_approval || exit 1
       elif [ -n "$EXPECTED_HEAD" ]; then
         echo "error: $URL is behind its base; updating its source branch requires explicit --update-branch consent on this authorized merge request (the update remains if new checks prevent merging)" >&2

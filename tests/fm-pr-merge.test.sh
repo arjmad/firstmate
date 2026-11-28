@@ -8086,7 +8086,7 @@ run_class_case() {  # <case_dir> <pr-number> [args...]; sets RC
   local case_dir=$1 number=$2
   shift 2
   set +e
-  run_pr_merge "$case_dir" task-x1 "https://github.com/example/repo/pull/$number" "$@" \
+  FM_PR_GITHUB_CLASS_SETTLE=0 run_pr_merge "$case_dir" task-x1 "https://github.com/example/repo/pull/$number" "$@" \
     > "$case_dir/stdout" 2> "$case_dir/stderr"
   RC=$?
   set -e
@@ -8218,6 +8218,8 @@ test_pr_class_away_add_class_refuses_every_other_write() {
   run_class_case "$case_dir" 186 --add-class fleet
   expect_code 1 "$RC" "class-away-reverted: a line removed after the edit must refuse: $(cat "$case_dir/stderr")"
   [ "$(grep -c '^pr edit' "$case_dir/gh.log")" -eq 1 ] || fail "class-away-reverted: the body was written more than once"
+  assert_grep 'writes no more and this PR waits' "$case_dir/stderr" "class-away-reverted: the refusal did not hold for the return"
+  assert_no_grep 're-run the merge with --add-class' "$case_dir/stderr" "class-away-reverted: the refusal invited another write"
   assert_no_grep 'pr merge' "$case_dir/gh.log" "class-away-reverted: the merge ran"
 
   # GitLab takes no away write.
