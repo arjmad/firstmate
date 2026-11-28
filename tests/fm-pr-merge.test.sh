@@ -374,7 +374,38 @@ case "${1:-} ${2:-}" in
         cat "$FM_TEST_GH_TEXT_JSON"
         exit 0
         ;;
+      *" --json body "*)
+        # The away Class line's re-read; a fixture body changes under it.
+        if [ -f "$fixtures/github-body-before-edit" ]; then
+          jq -c --rawfile b "$fixtures/github-body-before-edit" '.body = $b' "$FM_TEST_GH_VIEW_JSON" \
+            > "$FM_TEST_GH_VIEW_JSON.tmp" && mv "$FM_TEST_GH_VIEW_JSON.tmp" "$FM_TEST_GH_VIEW_JSON"
+          rm -f "$fixtures/github-body-before-edit"
+        fi
+        jq -c '{body}' "$FM_TEST_GH_VIEW_JSON"
+        # After the edit's read-back, someone else removes the line again.
+        if [ -f "$fixtures/github-body-reverts" ] && [ -f "$fixtures/github-edited-body" ]; then
+          jq -c --rawfile b "$fixtures/github-body-reverts" '.body = $b' "$FM_TEST_GH_VIEW_JSON" \
+            > "$FM_TEST_GH_VIEW_JSON.tmp" && mv "$FM_TEST_GH_VIEW_JSON.tmp" "$FM_TEST_GH_VIEW_JSON"
+        fi
+        exit 0
+        ;;
     esac
+    ;;
+  "pr edit")
+    # The away Class line: the new body is kept and becomes the live body,
+    # unless a fixture fails the edit or the forge stores something else.
+    cat > "$fixtures/github-edited-body"
+    [ ! -f "$fixtures/github-edit-fails" ] || exit 1
+    stored="$fixtures/github-edited-body"
+    [ ! -f "$fixtures/github-edit-stores" ] || stored="$fixtures/github-edit-stores"
+    jq -c --rawfile b "$stored" '.body = $b' "$FM_TEST_GH_VIEW_JSON" \
+      > "$FM_TEST_GH_VIEW_JSON.tmp" && mv "$FM_TEST_GH_VIEW_JSON.tmp" "$FM_TEST_GH_VIEW_JSON"
+    # A workflow the edit started reports at the same head.
+    if [ -f "$fixtures/github-check-after-edit" ]; then
+      jq -c --arg c "$(cat "$fixtures/github-check-after-edit")" '.statusCheckRollup[0].conclusion = $c' \
+        "$FM_TEST_GH_VIEW_JSON" > "$FM_TEST_GH_VIEW_JSON.tmp" && mv "$FM_TEST_GH_VIEW_JSON.tmp" "$FM_TEST_GH_VIEW_JSON"
+    fi
+    exit 0
     ;;
   "pr comment")
     # The captain-approval comment: its body is kept, and a fixture fails it.
@@ -8048,6 +8079,186 @@ test_pr_class_applies_on_gitlab_and_forgejo() {
   pass "fm-pr-merge applies the Class gate on GitLab and Forgejo too"
 }
 
+# The away Class line (docs/fork-decisions/2026-11-28-away-class-line.md):
+# while away, --add-class appends one Class line to a body with none and the
+# merge runs on; every other PR write stays refused.
+run_class_case() {  # <case_dir> <pr-number> [args...]; sets RC
+  local case_dir=$1 number=$2
+  shift 2
+  set +e
+  FM_PR_GITHUB_CLASS_SETTLE=0 run_pr_merge "$case_dir" task-x1 "https://github.com/example/repo/pull/$number" "$@" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr"
+  RC=$?
+  set -e
+}
+
+test_pr_class_away_add_class_adds_the_line_then_merges() {
+  local case_dir body expected n=0 head=c1a55c1a55c1a55c1a55c1a55c1a55c1a55c1a58
+  for body in $'## Summary\n\nA fix.\n' $'## Summary\r\n\r\nA fix.' ''; do
+    n=$((n + 1))
+    case $n in
+      1) expected=$'## Summary\n\nA fix.\n\nClass: fleet\n' ;;
+      2) expected=$'## Summary\r\n\r\nA fix.\n\nClass: fleet\n' ;;
+      3) expected=$'Class: fleet\n' ;;
+    esac
+    case_dir=$(visual_review_case "class-away-add-$n" "$head" "$body")
+    class_brief "$case_dir"
+    write_away_record "$case_dir" --words 'merge task-x1 when green'
+    run_class_case "$case_dir" 174 --add-class fleet
+    expect_code 0 "$RC" "class-away-add-$n: the away merge should add the line and merge: $(cat "$case_dir/stderr")"
+    [ "$(cat "$case_dir/github-edited-body"; printf x)" = "${expected}x" ] \
+      || fail "class-away-add-$n: the edit was not the old body plus one Class line: $(cat "$case_dir/github-edited-body")"
+    [ "$(grep -c '^pr edit' "$case_dir/gh.log")" -eq 1 ] || fail "class-away-add-$n: the body was not edited exactly once"
+    assert_grep 'verified: added Class: fleet' "$case_dir/stderr" "class-away-add-$n: the write was not reported"
+    assert_grep 'carries Class: fleet' "$case_dir/stderr" "class-away-add-$n: the gate did not read the added line"
+    assert_logged_gh_merge "$case_dir" 174 example/repo --squash
+  done
+
+  # A re-run on a body that already carries the same word writes nothing.
+  case_dir=$(visual_review_case class-away-add-rerun "$head" $'## Summary\n\nA fix.\n\nClass: fleet\n')
+  class_brief "$case_dir"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  run_class_case "$case_dir" 175 --add-class fleet
+  expect_code 0 "$RC" "class-away-add-rerun: a body with the same word should merge: $(cat "$case_dir/stderr")"
+  assert_no_grep 'pr edit' "$case_dir/gh.log" "class-away-add-rerun: a body already carrying the line was edited"
+  assert_logged_gh_merge "$case_dir" 175 example/repo --squash
+
+  # Without the flag the away refusal names it.
+  case_dir=$(visual_review_case class-away-hint "$head" $'## Summary\n\nA fix.\n')
+  class_brief "$case_dir"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  run_class_case "$case_dir" 176
+  expect_code 1 "$RC" "class-away-hint: an away merge with no Class line must refuse: $(cat "$case_dir/stderr")"
+  assert_grep 'while away, re-run the merge with --add-class <word>' "$case_dir/stderr" \
+    "class-away-hint: the away refusal did not name --add-class"
+  assert_no_grep 'pr edit' "$case_dir/gh.log" "class-away-hint: the body was edited without the flag"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "class-away-hint: the merge ran"
+  pass "fm-pr-merge --add-class adds one missing Class line while away, then merges on green"
+}
+
+test_pr_class_away_add_class_refuses_every_other_write() {
+  local case_dir n=0 head=c1a55c1a55c1a55c1a55c1a55c1a55c1a55c1a59 body want
+  # A body with another word or a bad one is never changed.
+  for body in $'Class: sales\n' $'Class: marketing\n' $'Class: sales\nClass: run\n'; do
+    n=$((n + 1))
+    case_dir=$(visual_review_case "class-away-change-$n" "$head" "$body")
+    class_brief "$case_dir"
+    write_away_record "$case_dir" --words 'merge task-x1 when green'
+    run_class_case "$case_dir" 177 --add-class fleet
+    expect_code 1 "$RC" "class-away-change-$n: --add-class must not change a Class line: $(cat "$case_dir/stderr")"
+    assert_grep 'only adds a missing line, never changes one' "$case_dir/stderr" \
+      "class-away-change-$n: the refusal did not say why: $(cat "$case_dir/stderr")"
+    assert_no_grep 'pr edit' "$case_dir/gh.log" "class-away-change-$n: the body was edited"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" "class-away-change-$n: the merge ran"
+  done
+
+  # A brief that asks for no line gets no write.
+  case_dir=$(visual_review_case class-away-no-brief "$head" $'## Summary\n\nA capture.\n')
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  run_class_case "$case_dir" 178 --add-class fleet
+  expect_code 1 "$RC" "class-away-no-brief: --add-class on a task with no Class brief must refuse"
+  assert_grep 'asks for no Class line' "$case_dir/stderr" "class-away-no-brief: the refusal did not say why"
+  assert_no_grep 'pr edit' "$case_dir/gh.log" "class-away-no-brief: the body was edited"
+
+  # An unknown word is refused before any forge call.
+  case_dir=$(visual_review_case class-away-bad-word "$head" $'## Summary\n\nA fix.\n')
+  class_brief "$case_dir"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  run_class_case "$case_dir" 179 --add-class marketing
+  expect_code 2 "$RC" "class-away-bad-word: an unknown word must be refused"
+  assert_grep "--add-class 'marketing' is not one of" "$case_dir/stderr" "class-away-bad-word: the refusal did not name the word"
+  [ ! -s "$case_dir/gh.log" ] || fail "class-away-bad-word: a forge call ran: $(cat "$case_dir/gh.log")"
+
+  # A body that changed after the live verify is not written over.
+  case_dir=$(visual_review_case class-away-raced "$head" $'## Summary\n\nA fix.\n')
+  class_brief "$case_dir"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  printf '## Summary\n\nA fix, edited since.\n' > "$case_dir/github-body-before-edit"
+  run_class_case "$case_dir" 180 --add-class fleet
+  expect_code 1 "$RC" "class-away-raced: a changed body must refuse: $(cat "$case_dir/stderr")"
+  assert_grep 'its body changed after it was read' "$case_dir/stderr" "class-away-raced: the refusal did not say why"
+  assert_no_grep 'pr edit' "$case_dir/gh.log" "class-away-raced: the changed body was edited"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "class-away-raced: the merge ran"
+
+  # A forge that stores anything but the old body plus the line refuses the merge.
+  for want in edit-fails edit-stores; do
+    case_dir=$(visual_review_case "class-away-$want" "$head" $'## Summary\n\nA fix.\n')
+    class_brief "$case_dir"
+    write_away_record "$case_dir" --words 'merge task-x1 when green'
+    printf '## Summary\n\nSomething else.\n\nClass: fleet\n' > "$case_dir/github-$want"
+    run_class_case "$case_dir" 181 --add-class fleet
+    expect_code 1 "$RC" "class-away-$want: an edit that did not land as asked must refuse: $(cat "$case_dir/stderr")"
+    assert_no_grep 'pr merge' "$case_dir/gh.log" "class-away-$want: the merge ran"
+  done
+
+  # A body ending inside an open code fence would hide the line, so nothing is written.
+  case_dir=$(visual_review_case class-away-open-fence "$head" $'## Summary\n\n```text\nClass: <word>\n')
+  class_brief "$case_dir"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  run_class_case "$case_dir" 184 --add-class fleet
+  expect_code 1 "$RC" "class-away-open-fence: an open fence must refuse: $(cat "$case_dir/stderr")"
+  assert_grep 'would not read as Class: fleet' "$case_dir/stderr" "class-away-open-fence: the refusal did not say why"
+  assert_no_grep 'pr edit' "$case_dir/gh.log" "class-away-open-fence: the body was edited"
+
+  # A check the edit started that fails at the same head stops the merge.
+  case_dir=$(visual_review_case class-away-check-after-edit "$head" $'## Summary\n\nA fix.\n')
+  class_brief "$case_dir"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  printf 'FAILURE' > "$case_dir/github-check-after-edit"
+  run_class_case "$case_dir" 185 --add-class fleet
+  expect_code 1 "$RC" "class-away-check-after-edit: a check that failed after the edit must refuse: $(cat "$case_dir/stderr")"
+  assert_grep 'verified: added Class: fleet' "$case_dir/stderr" "class-away-check-after-edit: the line was not added"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "class-away-check-after-edit: the merge ran past the failed check"
+
+  # One write per run: a line removed again after the edit is never re-added.
+  case_dir=$(visual_review_case class-away-reverted "$head" $'## Summary\n\nA fix.\n')
+  class_brief "$case_dir"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  printf '## Summary\n\nA fix.\n' > "$case_dir/github-body-reverts"
+  run_class_case "$case_dir" 186 --add-class fleet
+  expect_code 1 "$RC" "class-away-reverted: a line removed after the edit must refuse: $(cat "$case_dir/stderr")"
+  [ "$(grep -c '^pr edit' "$case_dir/gh.log")" -eq 1 ] || fail "class-away-reverted: the body was written more than once"
+  assert_grep 'writes no more and this PR waits' "$case_dir/stderr" "class-away-reverted: the refusal did not hold for the return"
+  assert_no_grep 're-run the merge with --add-class' "$case_dir/stderr" "class-away-reverted: the refusal invited another write"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "class-away-reverted: the merge ran"
+
+  # GitLab takes no away write.
+  case_dir=$(make_gitlab_case class-away-gitlab)
+  set_pr_body "$case_dir/mr.json" description $'## Summary\n\nA fix.\n'
+  class_brief "$case_dir"
+  write_away_record "$case_dir" --words 'merge task-x1 when green'
+  set +e
+  run_pr_merge "$case_dir" task-x1 "$MR_URL" --add-class fleet > "$case_dir/stdout" 2> "$case_dir/stderr"
+  RC=$?
+  set -e
+  expect_code 2 "$RC" "class-away-gitlab: --add-class must be refused on GitLab"
+  assert_grep '--add-class applies only to GitHub' "$case_dir/stderr" "class-away-gitlab: the refusal did not say why"
+  pass "fm-pr-merge --add-class refuses every PR write but adding one missing Class line"
+}
+
+test_pr_class_add_class_is_refused_attended() {
+  local case_dir head=c1a55c1a55c1a55c1a55c1a55c1a55c1a55c1a5a
+  case_dir=$(visual_review_case class-attended-add "$head" $'## Summary\n\nA fix.\n')
+  class_brief "$case_dir"
+  run_class_case "$case_dir" 182 --add-class fleet
+  expect_code 2 "$RC" "class-attended-add: --add-class must be refused attended: $(cat "$case_dir/stderr")"
+  assert_grep '--add-class is away-only' "$case_dir/stderr" "class-attended-add: the refusal did not say away-only"
+  assert_no_grep 'pr edit' "$case_dir/gh.log" "class-attended-add: the body was edited"
+  assert_no_grep 'pr merge' "$case_dir/gh.log" "class-attended-add: the merge ran"
+
+  # The attended refusal without the flag is unchanged and writes nothing.
+  case_dir=$(visual_review_case class-attended-plain "$head" $'## Summary\n\nA fix.\n')
+  class_brief "$case_dir"
+  run_class_case "$case_dir" 183
+  expect_code 1 "$RC" "class-attended-plain: an attended merge with no Class line must refuse"
+  # shellcheck disable=SC2016 # the backticks are literal Markdown
+  assert_grep 'add one line `Class: <word>` to the PR body' "$case_dir/stderr" \
+    "class-attended-plain: the attended refusal changed: $(cat "$case_dir/stderr")"
+  assert_no_grep 'while away' "$case_dir/stderr" "class-attended-plain: the attended refusal named the away flag"
+  assert_no_grep 'pr edit' "$case_dir/gh.log" "class-attended-plain: the body was edited"
+  pass "fm-pr-merge refuses --add-class attended and keeps the attended Class refusal unchanged"
+}
+
 test_squash_summary_uses_title_and_what_changed
 test_squash_summary_reads_crlf_bodies
 test_squash_summary_falls_back_to_repository_default
@@ -8067,3 +8278,6 @@ test_pr_class_refuses_a_scaffold_brief_without_a_class_line
 test_pr_class_merges_a_scaffold_brief_with_a_class_line
 test_pr_class_older_brief_and_no_brief_merge_as_before
 test_pr_class_applies_on_gitlab_and_forgejo
+test_pr_class_away_add_class_adds_the_line_then_merges
+test_pr_class_away_add_class_refuses_every_other_write
+test_pr_class_add_class_is_refused_attended
