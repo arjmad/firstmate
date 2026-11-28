@@ -5,6 +5,8 @@
 #        fm-tasks-axi.sh owner <id> [arjun|fleet]
 #        fm-tasks-axi.sh due <id> [YYYY-MM-DD|-]
 #        fm-tasks-axi.sh batch <id> [<tag>|-]
+#        fm-tasks-axi.sh asked <id> [sapna|sunita [<ref>]|-]
+#        fm-tasks-axi.sh list --asked [sapna|sunita] [--json]
 #        fm-tasks-axi.sh archive-path
 #        fm-tasks-axi.sh apply <file> [--check]
 #        fm-tasks-axi.sh --help
@@ -69,6 +71,16 @@
 # same control lock as `owner`. Rows already in the backlog stay readable as
 # they are.
 #
+# Asks to people outside the fleet (bin/fm-asks.sh owns what they do): the
+# wrapper-only `asked <id>` prints the row's `Asked:` value (`-` when none),
+# `asked <id> sapna|sunita [<ref>]` records `Asked: <person> <today> [<ref>]`
+# under the same control lock (a repeat naming the same person and ref keeps
+# the first date, so the ask's age stays true), and `asked <id> -` clears it.
+# `update` carries it like the due date and batch tag. `list --asked
+# [<person>]` runs bin/fm-asks.sh list, the open asks with their age; it is a
+# `list` so a reader limited to list and show, such as Nova through the
+# fleet-handoff skill's `backlog list`, can run it.
+#
 # Handoff replies: after `done` (or `close`) and `rm` (or `delete`) succeed, the
 # wrapper runs bin/fm-inbox.sh close-reply, which answers the row's handoff note
 # (request id handoff:<id>) when it has no reply yet: done with the close's
@@ -80,6 +92,11 @@
 # drops rows through `done`), and `skip` writes nothing, leaving the reply to a
 # person (bin/fm-inbox.sh unread resurfaces it). A help read writes nothing.
 # Reply before closing when you have a fuller answer: a note keeps one reply.
+# A row carrying an `Asked:` line is read just before the close, and after the
+# close lands bin/fm-asks.sh settle runs with that value, the row's title and
+# the same links or reason, under the same FM_HANDOFF_CLOSE_REPLY rules: for
+# Sapna it sends Nova the settlement of the envelope the line names. Its lines
+# go to stderr, and it never changes the close's exit status or stdout.
 #
 # Done archive: tasks-axi never reads back the rows that markdown retention
 # moved out of the backlog. The wrapper-only subcommand `archive-path` prints
@@ -550,7 +567,7 @@ prepare_update_owner() {
   [ "$named" != fleet ] || ! shown_captain_hold || refuse_fleet_on_captain_hold "$id"
   refuse_body_batch "$body" "$(fm_backlog_row_field_of_body batch "$SHOWN_BODY")"
   [ -n "$named" ] || recorded=$(fm_backlog_owner_of_body "$SHOWN_BODY")
-  for field in due batch; do
+  for field in due batch asked; do
     [ -z "$(fm_backlog_row_field_of_body "$field" "$body")" ] || continue
     value=$(fm_backlog_row_field_of_body "$field" "$SHOWN_BODY")
     [ -n "$value" ] || continue
@@ -598,9 +615,9 @@ command_owner() {
   printf 'ok: owner %s -> %s\n' "$id" "$want"
 }
 
-# The wrapper-only `due <id> [YYYY-MM-DD|-]` and `batch <id> [<tag>|-]`
-# subcommands.
-command_row_field() {  # <due|batch>
+# The wrapper-only `due <id> [YYYY-MM-DD|-]`, `batch <id> [<tag>|-]` and
+# `asked <id> [<value>|-]` subcommands; command_asked builds asked's value.
+command_row_field() {  # <due|batch|asked>
   local field=$1 id=${ARGS[1]:-} want=${ARGS[2]:-} recorded body owner
   case "$id" in ''|-*) fail "usage: $field <id> [value|-]" ;; esac
   [ "${#ARGS[@]}" -le 3 ] || fail "usage: $field <id> [value|-]"
@@ -609,6 +626,8 @@ command_row_field() {  # <due|batch>
       due) fm_backlog_date_valid "$want" || fail "a due date must be YYYY-MM-DD: $want" ;;
       batch) fm_backlog_batch_valid "$want" \
         || fail "$FM_BACKLOG_BATCH_RULE: $want" ;;
+      asked) fm_backlog_asked_valid "$want" \
+        || fail "an ask names sapna or sunita, its date and an optional ref of letters, digits, dots, dashes and underscores: $want" ;;
     esac
   fi
   [ -z "$want" ] || task_lock "$id"
@@ -634,6 +653,63 @@ command_row_field() {  # <due|batch>
   fi
   rm -f -- "$OWNER_BODY_FILE"
   printf 'ok: %s %s -> %s\n' "$field" "$id" "${want:--}"
+}
+
+# `asked <id> [sapna|sunita [<ref>]|-]` (see the header): today's date goes on
+# a new ask, and the recorded date stays when the person and ref are the same.
+command_asked() {
+  local id=${ARGS[1]:-} person=${ARGS[2]:-} ref=${ARGS[3]:-} recorded r_person r_ref
+  case "$id" in ''|-*) fail "usage: asked <id> [sapna|sunita [<ref>]|-]" ;; esac
+  [ "${#ARGS[@]}" -le 4 ] || fail "usage: asked <id> [sapna|sunita [<ref>]|-]"
+  case "$person" in
+    ''|-) [ -z "$ref" ] || fail "usage: asked <id> [sapna|sunita [<ref>]|-]"; command_row_field asked; return ;;
+    sapna|sunita) ;;
+    *) fail "an ask names one of: $FM_BACKLOG_ASK_PEOPLE, not $person" ;;
+  esac
+  shown_body "$id" || fail "no backlog row $id in this home"
+  recorded=$(fm_backlog_row_field_of_body asked "$SHOWN_BODY")
+  read -r r_person _ r_ref <<<"$recorded"
+  if [ -n "$recorded" ] && [ "$r_person" = "$person" ] && [ "$r_ref" = "$ref" ]; then
+    printf 'ok: asked %s already %s\n' "$id" "$recorded"
+    return 0
+  fi
+  ARGS=(asked "$id" "$person $(date -u +%Y-%m-%d)${ref:+ $ref}")
+  command_row_field asked
+}
+
+# The `Asked:` value and title of the row a close names, read before the close
+# so a removal still settles; both empty when it carries none or is unreadable.
+CLOSE_ASKED=
+CLOSE_TITLE=
+read_close_asked() {
+  CLOSE_ASKED=
+  CLOSE_TITLE=
+  [ "${FM_HANDOFF_CLOSE_REPLY:-}" != skip ] || return 0
+  close_args || return 0
+  [ -n "$CLOSE_ID" ] || return 0
+  shown_body "$CLOSE_ID" 2>/dev/null || return 0
+  CLOSE_ASKED=$(fm_backlog_row_field_of_body asked "$SHOWN_BODY")
+  [ -n "$CLOSE_ASKED" ] || return 0
+  CLOSE_TITLE=$(fm_backlog_owner_shown_body "$(printf '%s\n' "$SHOWN_ROW" | sed -n 's/^  title: /  body: /p' | head -1)") \
+    || CLOSE_TITLE=$CLOSE_ID
+}
+
+# After the close landed: settle the row's ask through bin/fm-asks.sh.
+settle_close_ask() {  # <verb>
+  local how="done"
+  [ -n "$CLOSE_ASKED" ] || return 0
+  local -a flags=(--asked "$CLOSE_ASKED" --title "${CLOSE_TITLE:-$CLOSE_ID}")
+  case "$1" in rm|delete) how=removed; flags+=(--reason "$REASON") ;; esac
+  if [ "${FM_HANDOFF_CLOSE_REPLY:-}" = removed ]; then
+    how=removed
+    flags+=(--reason "${REASON:-$CLOSE_NOTE}")
+  elif [ "$how" = "done" ]; then
+    flags+=(${CLOSE_FLAGS[@]+"${CLOSE_FLAGS[@]}"})
+  fi
+  FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+    "$SCRIPT_DIR/fm-asks.sh" settle "$CLOSE_ID" "$how" "${flags[@]}" >&2 \
+    || printf 'fm-tasks-axi: %s %s landed, but its ask was not settled; see the line above\n' "$1" "$CLOSE_ID" >&2
+  return 0
 }
 
 # The wrapper-only `apply <file> [--check]` subcommand (see the header).
@@ -1037,6 +1113,19 @@ guard_superseded_quote
 
 cd "$FM_BACKLOG_AXI_ROOT" || fail "cannot enter the backlog root $FM_BACKLOG_AXI_ROOT"
 case "${1:-}" in
+  list)
+    for arg in ${ARGS[@]+"${ARGS[@]}"}; do
+      [ "$arg" = --asked ] || continue
+      asks_args=()
+      for asks_arg in "${ARGS[@]:1}"; do
+        [ "$asks_arg" = --asked ] || asks_args+=("$asks_arg")
+      done
+      exec env FM_HOME="$FM_HOME" FM_STATE_OVERRIDE="$STATE" FM_DATA_OVERRIDE="$DATA" FM_CONFIG_OVERRIDE="$CONFIG" \
+        "$SCRIPT_DIR/fm-asks.sh" list ${asks_args[@]+"${asks_args[@]}"}
+    done
+    ;;
+esac
+case "${1:-}" in
   show|view|list)
     set -o pipefail
     tasks-axi ${ARGS[@]+"${ARGS[@]}"} | fm_hold_reason_decode_stream
@@ -1048,6 +1137,10 @@ case "${1:-}" in
     ;;
   due|batch)
     command_row_field "$1"
+    exit $?
+    ;;
+  asked)
+    command_asked
     exit $?
     ;;
   apply)
@@ -1088,6 +1181,7 @@ if [ -n "$OWNER_BODY_FILE" ]; then
 fi
 case "${1:-}" in
   done|close)
+    read_close_asked
     # Captured, so a refusal of a row retention already archived reads as done.
     status=0
     closed=$(tasks-axi ${ARGS[@]+"${ARGS[@]}"}) || status=$?
@@ -1095,13 +1189,14 @@ case "${1:-}" in
       exit 0
     fi
     [ -z "$closed" ] || printf '%s\n' "$closed"
-    [ "$status" -eq 0 ] && close_reply "$1"
+    [ "$status" -eq 0 ] && close_reply "$1" && settle_close_ask "$1"
     exit "$status"
     ;;
   rm|delete)
+    read_close_asked
     status=0
     tasks-axi ${ARGS[@]+"${ARGS[@]}"} || status=$?
-    [ "$status" -eq 0 ] && close_reply "$1"
+    [ "$status" -eq 0 ] && close_reply "$1" && settle_close_ask "$1"
     exit "$status"
     ;;
 esac
