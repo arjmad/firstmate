@@ -1,7 +1,7 @@
 ---
 name: harness-adapters
 description: >-
-  Load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
+  Load before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, verifying a new harness adapter, or running a one-shot Hermes probe against a fleet agent's profile.
 user-invocable: false
 metadata:
   internal: true
@@ -78,7 +78,8 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
       "default": ["references/common/model-and-effort.md"],
       "configured-profile": ["references/common/model-and-effort.md", "references/common/dispatch.md"]
     },
-    "verify": {"default": ["references/common/dispatch.md", "references/common/control-and-recovery.md", "references/common/primary-hooks.md", "references/common/model-and-effort.md"]}
+    "verify": {"default": ["references/common/dispatch.md", "references/common/control-and-recovery.md", "references/common/primary-hooks.md", "references/common/model-and-effort.md"]},
+    "probe": {"default": []}
   },
   "harnesses": {
     "claude": "references/harness/claude.md",

@@ -2,6 +2,7 @@
 
 Hermes is a spawned crewmate/scout TUI adapter on tmux only.
 Primary and secondmate supervision, other runtime backends, desktop/web surfaces, and messaging bridges are unsupported and refused.
+Firstmate also runs one-shot probes against a fleet agent's own Hermes profile, outside any spawn; [One-shot probes](#one-shot-probes) owns how.
 [Hermes verification](../../../../../docs/verification/hermes.md) owns dated vendor evidence and the live guard.
 
 ## Operating facts
@@ -28,6 +29,15 @@ An existing managed scope is refused before hooks are staged.
 Firstmate does not stop, restart, or message the gateway.
 The [verification record](../../../../../docs/verification/hermes.md) owns the idle-coexistence evidence and its limits.
 The check is a launch preflight, not a lifetime reservation: the gateway may begin a turn after dispatch, and overlapping turns on one profile were not verified.
+
+## One-shot probes
+
+An ad hoc one-shot call against a fleet agent's profile (`hermes -p <profile> -z "<prompt>"`, or `chat --oneshot`) loads the profile's whole `cli` toolset lane unless the caller passes `-t/--toolsets`, which is 70 to 118 KB of tool schemas on the fleet's profiles.
+Pass `-t <toolsets>,no_mcp` by default, naming only the toolsets that probe needs, as in `hermes -p <profile> -z "<prompt>" -t memory,no_mcp`.
+Keep `no_mcp` because a `-t` list that names no MCP server still merges every enabled MCP server into the tool catalog: `-t memory` alone still carried 35,078 B.
+On 2026-11-28 (Hermes 0.23.0) `-t memory,no_mcp` cut one Cade probe from 71,973 B, 26 tools and 38,926 input tokens to 5,094 B, 4 tools and 11,518 input tokens.
+To widen a probe, add the toolsets it needs (such as `terminal`, `file` or `browser`); drop `no_mcp` only when it needs an MCP server, and then name that server in the list.
+This governs the caller's probe only; the spawned worker TUI above and a profile's cron jobs keep their own toolsets.
 
 ## Limits
 
