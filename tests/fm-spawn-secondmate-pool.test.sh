@@ -67,7 +67,9 @@ case "${1:-}" in
         pool="$root/.treehouse/project-pool"
         slot="$pool/1/project"
         mkdir -p "$pool"
-        printf '{"worktrees":[]}\n' > "$pool/treehouse-state.json"
+        # List the grown slot as Treehouse does, so the fork's in-place
+        # `treehouse lease` (fm_treehouse_slot_lease_take) can find it.
+        printf '{"worktrees":[{"name":"1","path":"%s"}]}\n' "$slot" > "$pool/treehouse-state.json"
         git -C "$FM_FAKE_PANE_PATH" worktree add --quiet --detach "$slot" >/dev/null 2>&1 || exit 1
         printf '%s\n' "$slot" > "$FM_FAKE_PANE_FILE"
         ;;
@@ -78,6 +80,9 @@ esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
+  # The in-place lease runs the treehouse binary itself; this fake refuses a
+  # lease whose --root is not the slot's own pool root.
+  fm_fake_treehouse_pool "$fakebin"
   fm_test_fake_sleep_noop "$fakebin"
   printf '%s\n' "$fakebin"
 }
@@ -91,7 +96,7 @@ make_main_home() {  # <case-dir>
   fm_git_init_commit "$main/projects/project"
   fm_git_add_origin "$main/projects/project" "$case_dir/origin.git"
   mkdir -p "$pool"
-  printf '{"worktrees":[]}\n' > "$pool/treehouse-state.json"
+  printf '{"worktrees":[{"name":"1","path":"%s"}]}\n' "$slot" > "$pool/treehouse-state.json"
   git -C "$main/projects/project" worktree add --quiet --detach "$slot"
 }
 
@@ -195,6 +200,8 @@ test_local_secondmate_spawns_from_its_own_clone_pool() {
     "$root/"*) ;;
     *) fail "the secondmate spawn recorded a worktree outside its own pool: $wt" ;;
   esac
+  grep -Fq "\"lease_holder\":\"$id\"" "$root/.treehouse/project-pool/treehouse-state.json" \
+    || fail "the secondmate slot was not leased to $id in its own pool: $(cat "$root/.treehouse/project-pool/treehouse-state.json")"
   [ "$(common_dir_of "$wt")" = "$(common_dir_of "$mate/projects/project")" ] \
     || fail "the secondmate slot is not a worktree of the secondmate's own clone"
   [ -f "$(dirname "$wt")/.fm-slot-owner" ] \

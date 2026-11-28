@@ -2115,16 +2115,21 @@ fm_treehouse_max_trees() {  # <project-dir>
 # unreadable status or cap, a slot status it does not know - answers not full,
 # leaving Treehouse to decide. When full, sets FM_TREEHOUSE_POOL_SLOTS,
 # FM_TREEHOUSE_POOL_CAP, and FM_TREEHOUSE_POOL_HOLDERS (each slot's lease
-# holder, or its slot name and why it is busy, comma-separated).
+# holder, or its slot name and why it is busy, comma-separated). [treehouse-root]
+# is the `--root` the spawn's own `treehouse get` uses (fm_treehouse_spawn_root),
+# empty for Treehouse's default, so the check reads the pool the spawn would
+# draw from.
 # shellcheck disable=SC2034 # Output globals, read by the sourcing caller.
-fm_treehouse_pool_full() {  # <project-dir>
-  local project=$1 cap status out line
+fm_treehouse_pool_full() {  # <project-dir> [treehouse-root]
+  local project=$1 root=${2:-} cap status out line
+  local -a root_args=()
   FM_TREEHOUSE_POOL_SLOTS=
   FM_TREEHOUSE_POOL_CAP=
   FM_TREEHOUSE_POOL_HOLDERS=
   command -v treehouse >/dev/null 2>&1 && command -v jq >/dev/null 2>&1 || return 1
   cap=$(fm_treehouse_max_trees "$project") || return 1
-  status=$( (CDPATH='' cd -- "$project" && treehouse status --json) </dev/null 2>/dev/null) || return 1
+  [ -z "$root" ] || root_args=(--root "$root")
+  status=$( (CDPATH='' cd -- "$project" && treehouse "${root_args[@]+"${root_args[@]}"}" status --json) </dev/null 2>/dev/null) || return 1
   out=$(printf '%s' "$status" | jq -r --argjson cap "$cap" '
     def clean: tostring | gsub("[\u0000-\u001f\u007f]"; "?");
     if type != "array" or length < $cap
@@ -2330,13 +2335,21 @@ NODE
 # Idempotent for the task's own lease; refuses a slot leased by anything else,
 # one its pool does not list, and one whose pool state cannot be read.
 # `treehouse lease` takes the slot's pool name and resolves the pool from its
-# working directory, so it runs from the slot itself, and the outcome is then
-# re-read from the slot's own pool state by path: a lease that landed anywhere
-# else is reported, never accepted. Prints the reason for a refusal on stderr.
+# working directory and its root, so it runs from the slot itself. Treehouse
+# keeps a root's pools at <root>/.treehouse/<pool>/<slot>/<repo>, so when the
+# slot's pool sits in a `.treehouse` directory the lease passes that
+# directory's parent as `--root`: a secondmate home's slots live in a pool under
+# its own root (fm_treehouse_spawn_root), and without it the lease would resolve
+# this machine's default pool instead. The outcome is then re-read from the
+# slot's own pool state by path: a lease that landed anywhere else is reported,
+# never accepted. Prints the reason for a refusal on stderr.
 fm_treehouse_slot_lease_take() {  # <worktree> <task-id>
-  local worktree=$1 id=$2 slot out
+  local worktree=$1 id=$2 slot out pools
+  local -a root_args=()
   [ -n "$id" ] || return 1
   slot=$(CDPATH='' cd -- "$worktree" 2>/dev/null && pwd -P) || return 1
+  pools=$(dirname "$(dirname "$(dirname "$slot")")")
+  [ "$(basename "$pools")" != .treehouse ] || root_args=(--root "$(dirname "$pools")")
   fm_treehouse_slot_lease_state "$slot" "$id"
   case "$FM_TREEHOUSE_SLOT_LEASE" in
     mine) return 0 ;;
@@ -2358,7 +2371,7 @@ fm_treehouse_slot_lease_take() {  # <worktree> <task-id>
     echo "error: the Treehouse pool state lists slot $slot without a name to lease it by" >&2
     return 1
   }
-  out=$(cd "$slot" && treehouse lease "$FM_TREEHOUSE_SLOT_LEASE_NAME" --lease-holder "$id") || {
+  out=$(cd "$slot" && treehouse "${root_args[@]+"${root_args[@]}"}" lease "$FM_TREEHOUSE_SLOT_LEASE_NAME" --lease-holder "$id") || {
     echo "error: treehouse lease could not lease pool slot $slot (name $FM_TREEHOUSE_SLOT_LEASE_NAME) to $id; the lease command needs treehouse 3.0.0 or newer" >&2
     return 1
   }

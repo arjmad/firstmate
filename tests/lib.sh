@@ -773,14 +773,24 @@ SH
 # $FM_FAKE_TREEHOUSE_GET_POOLS whose repository is the caller's and prints its
 # path; an interactive `get` exits 0. `status --json` (run from inside a
 # repository) prints those same slots in Treehouse's status shape, each
-# `leased` with its holder or `available`. Every call is logged as
-# `treehouse <arg>...` to $FM_RUNTIME_LOG when set; every other command exits 0.
+# `leased` with its holder or `available`. A leading `--root <dir>` is accepted
+# before any command. For a slot whose pool sits in a `.treehouse` directory,
+# `lease` refuses unless that directory is <dir>/.treehouse, or $HOME/.treehouse
+# without --root, as the real one would find no such pool; a fixture pool laid
+# out anywhere else leases only without --root. Every call is
+# logged as `treehouse <arg>...` to $FM_RUNTIME_LOG when set; every other
+# command exits 0.
 fm_fake_treehouse_pool() {
   local fakebin=$1
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
 if [ -n "${FM_RUNTIME_LOG:-}" ]; then
   { printf 'treehouse'; printf ' <%s>' "$@"; printf '\n'; } >> "$FM_RUNTIME_LOG"
+fi
+root=
+if [ "${1:-}" = --root ]; then
+  root=${2:-}
+  shift 2
 fi
 case "${1:-}" in
   get)
@@ -846,6 +856,16 @@ NODE
     ;;
   lease)
     pool=$(cd ../.. && pwd -P) || exit 1
+    if [ "$(basename "$(dirname "$pool")")" = .treehouse ]; then
+      want=${root:-${HOME:-}}
+      if [ "$(cd "$want" 2>/dev/null && pwd -P)" != "$(dirname "$(dirname "$pool")")" ]; then
+        echo "no pool for this repository under ${want:-the default root}" >&2
+        exit 1
+      fi
+    elif [ -n "$root" ]; then
+      echo "no pool for this repository under $root" >&2
+      exit 1
+    fi
     exec node - "$pool/treehouse-state.json" lease "$@" <<'NODE'
 const fs = require("fs");
 const [file, op, , name, , holder] = process.argv.slice(2);

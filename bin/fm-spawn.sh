@@ -5197,7 +5197,7 @@ if [ -n "$SPAWN_PROJECT_CAPACITY" ]; then
   fi
 fi
 if [ "$RELAUNCH" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] &&
-  fm_treehouse_pool_full "$PROJ_ABS"; then
+  fm_treehouse_pool_full "$PROJ_ABS" "$SPAWN_TREEHOUSE_ROOT"; then
   echo "deferred: $(basename "$PROJ_ABS") pool full ($FM_TREEHOUSE_POOL_SLOTS/$FM_TREEHOUSE_POOL_CAP): held by $FM_TREEHOUSE_POOL_HOLDERS; every Treehouse worktree slot is busy at the pool's max_trees cap, so task $ID was not launched and its backlog item stays queued - dispatch it again once one of them is cleaned up" >&2
   exit "$FM_PROJECT_CAPACITY_DEFER_EXIT"
 fi
@@ -5285,7 +5285,7 @@ if [ "$KIND" = ship ] && [ "$RELAUNCH" -eq 0 ]; then
       ALSO_PROJECTS+=("$also_abs")
     done
     for also_i in "${!ALSO_PROJECTS[@]}"; do
-      fm_treehouse_pool_full "${ALSO_PROJECTS[$also_i]}" || continue
+      fm_treehouse_pool_full "${ALSO_PROJECTS[$also_i]}" "$SPAWN_TREEHOUSE_ROOT" || continue
       echo "deferred: ${ALSO_REPOS[$also_i]} pool full ($FM_TREEHOUSE_POOL_SLOTS/$FM_TREEHOUSE_POOL_CAP): held by $FM_TREEHOUSE_POOL_HOLDERS; every Treehouse worktree slot of companion repository ${ALSO_REPOS[$also_i]} is busy at the pool's max_trees cap, so task $ID was not launched and its backlog item stays queued - dispatch it again once one of them is cleaned up" >&2
       exit "$FM_PROJECT_CAPACITY_DEFER_EXIT"
     done
@@ -5795,7 +5795,7 @@ spawn_take_companion_slot() { # <repo> <project>
     echo "error: could not create a file for treehouse's error output while leasing a companion worktree of $repo for task $ID" >&2
     return 1
   }
-  if ! out=$( (cd "$proj" && treehouse get --lease --lease-holder "$ID") </dev/null 2>"$err_file" ); then
+  if ! out=$( (cd "$proj" && spawn_treehouse get --lease --lease-holder "$ID") </dev/null 2>"$err_file" ); then
     err=$(sed '/^[[:space:]]*$/d' "$err_file" | tr '\n\t' '  ' | tr -d '[:cntrl:]')
     rm -f -- "$err_file"
     echo "error: treehouse could not lease a companion worktree of $repo for task $ID${err:+: ${err% }}" >&2
