@@ -137,6 +137,9 @@ A member is one held row and never shows alone, while a call with its own outsid
 `bin/fm-captain-hold.sh defer-batch <tag>` defers, and `answer-batch <tag>` answers, every captain call carrying the tag at once.
 A ship whose work carries other open rows, such as the noticed rows it fixes, names them on a `Covers: <id>[, <id>...]` body line of its own row, filed with the ship.
 When teardown closes that row for landed work, it prints one `covers:` line per named row still open and closes none itself, and [`ship-landing`](../.agents/skills/ship-landing/SKILL.md) closes or rewrites each one.
+A row that waits on an ask to Sapna or Sunita carries one `Asked: <person> YYYY-MM-DD [<ref>]` line (`bin/fm-tasks-axi.sh asked <id> sapna|sunita [<ref>]`), where the ref of a Sapna ask is the id of the envelope firstmate left Nova and the ref of a Sunita ask is its item on `data/sunita-list.md`; hold such a row `external` while the answer is out.
+`bin/fm-tasks-axi.sh list --asked [<person>]` lists the open asks with their age, and Nova reads Sapna's through the fleet-handoff skill's `backlog list --asked sapna`.
+When the row closes by any path, [`bin/fm-asks.sh`](../bin/fm-asks.sh) settles the ask inside the fleet: it sends Nova the settlement of an envelope she has not reported, and for Sunita it sends nothing and names the list item to strike.
 A reviewed list of corrections to many rows, such as a sweep's, lands as fields through `bin/fm-tasks-axi.sh apply <file>`, which sets each row's title, batch, hold and ask and refuses the whole list when one field cannot be set, never as body notes.
 Fleet work that only comes back on a date is a `future` hold with `--until`, never a captain hold.
 When a main-side thread such as a pending captain decision or relay reminder is worth durable tracking, file it as its own work item and hold it through that wrapper.
